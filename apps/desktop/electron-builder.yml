@@ -18,7 +18,7 @@ win:
   executableName: nexsql
   icon: build/icon.ico
   artifactName: ${productName}-Setup-${version}-${arch}.${ext}
-  signAndEditExecutable: false
+  signAndEditExecutable: true
   verifyUpdateCodeSignature: false
   target:
     - target: nsis
