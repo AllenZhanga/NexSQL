@@ -1,7 +1,8 @@
 ﻿import { useRef, useCallback, useState, useEffect } from 'react'
 import MonacoEditor, { type OnMount } from '@monaco-editor/react'
 import { KeyMod, KeyCode, languages, type editor, type IDisposable } from 'monaco-editor'
-import { Play, Loader2, ChevronDown, Download } from 'lucide-react'
+import { Play, Loader2, ChevronDown, Download, AlignLeft, Minimize2 } from 'lucide-react'
+import { format as formatSQL } from 'sql-formatter'
 import { clsx } from 'clsx'
 import { useQueryStore } from '@renderer/stores/queryStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
@@ -48,6 +49,28 @@ export function QueryEditor(): JSX.Element {
 
     useQueryStore.getState().executeQuery(tabId, selectedSql)
   }, [])
+
+  const handleFormatSQL = (): void => {
+    if (!activeTabId || !activeTab?.sql.trim()) return
+    try {
+      const formatted = formatSQL(activeTab.sql, { language: 'sql', tabWidth: 2, keywordCase: 'upper' })
+      updateTabSQL(activeTabId, formatted)
+      editorRef.current?.setValue(formatted)
+    } catch {
+      // 格式化失败时保持原样
+    }
+  }
+
+  const handleCompressSQL = (): void => {
+    if (!activeTabId || !activeTab?.sql.trim()) return
+    const compressed = activeTab.sql
+      .replace(/--[^\n]*/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    updateTabSQL(activeTabId, compressed)
+    editorRef.current?.setValue(compressed)
+  }
 
   const handleSaveSQL = (): void => {
     if (!activeTab?.sql.trim()) return
@@ -211,14 +234,32 @@ export function QueryEditor(): JSX.Element {
           执行
         </button>
 
+        <button          onClick={handleFormatSQL}
+          disabled={!activeTab.sql.trim()}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          title="美化 SQL"
+        >
+          <AlignLeft size={12} />
+          美化
+        </button>
+
         <button
-          onClick={handleSaveSQL}
+          onClick={handleCompressSQL}
+          disabled={!activeTab.sql.trim()}
+          className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          title="压缩 SQL（去除换行与注释）"
+        >
+          <Minimize2 size={12} />
+          压缩
+        </button>
+
+        <button          onClick={handleSaveSQL}
           disabled={!activeTab.sql.trim()}
           className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
           title="保存 SQL 为文件"
         >
           <Download size={12} />
-          保存 .sql
+          保存
         </button>
 
         {/* Connection picker */}

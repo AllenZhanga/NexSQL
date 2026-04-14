@@ -55,6 +55,16 @@ export function AppLayout(): JSX.Element {
 
   return (
     <div className="flex flex-col h-full bg-app-bg text-text-primary">
+      {/* macOS traffic-light spacer – only rendered on darwin.
+          hiddenInset keeps the red/yellow/green buttons but merges the titlebar
+          into the window content, so we need to reserve ~28 px at the top and
+          make it draggable so users can still move the window. */}
+      {window.platform === 'darwin' && (
+        <div
+          className="shrink-0 bg-app-sidebar"
+          style={{ height: 28, WebkitAppRegion: 'drag' } as React.CSSProperties}
+        />
+      )}
       {/* Main layout */}
       <PanelGroup direction="horizontal" className="flex-1 overflow-hidden">
         {/* Sidebar */}

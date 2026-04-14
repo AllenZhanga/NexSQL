@@ -31,6 +31,7 @@ declare global {
       onSQLToken(callback: (token: string) => void): () => void
       onSQLDone(callback: () => void): () => void
     }
+    platform: string | undefined
   }
 }
 

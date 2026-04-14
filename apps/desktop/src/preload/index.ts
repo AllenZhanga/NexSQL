@@ -89,6 +89,7 @@ const aiAPI = {
 
 contextBridge.exposeInMainWorld('db', dbAPI)
 contextBridge.exposeInMainWorld('ai', aiAPI)
+contextBridge.exposeInMainWorld('platform', process.platform)
 
 export type DbAPI = typeof dbAPI
 export type AiAPI = typeof aiAPI
