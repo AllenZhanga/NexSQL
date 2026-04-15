@@ -23,7 +23,15 @@ interface DisplayRow {
 interface RowMenuState {
   x: number
   y: number
-  displayRow: DisplayRow
+  selectedRows: DisplayRow[]
+}
+
+type RowSelectionMode = 'replace' | 'add' | 'remove'
+
+interface DragSelectionState {
+  anchorKey: string
+  baseKeys: string[]
+  mode: RowSelectionMode
 }
 
 interface EditingCell {
@@ -73,7 +81,9 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
   )
   const [showColumnFilters, setShowColumnFilters] = useState((tableView.columnFilters?.length ?? 0) > 0)
   const [rowMenu, setRowMenu] = useState<RowMenuState | null>(null)
-  const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null)
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([])
+  const [activeRowKey, setActiveRowKey] = useState<string | null>(null)
+  const [dragSelection, setDragSelection] = useState<DragSelectionState | null>(null)
   const [tableMeta, setTableMeta] = useState<TableMetaInfo | null>(null)
   const [metaLoading, setMetaLoading] = useState(false)
   const [metaError, setMetaError] = useState<string | null>(null)
@@ -92,7 +102,9 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
   }, [tab.id, tableView.filterText])
 
   useEffect(() => {
-    setSelectedRowKey(null)
+    setSelectedRowKeys([])
+    setActiveRowKey(null)
+    setDragSelection(null)
     setTableMeta(null)
     setMetaError(null)
   }, [tab.id, tab.tableName, tab.connectionId, tab.selectedDatabase])
@@ -225,20 +237,62 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
     return rows
   }, [tableView.pendingEdits, tableView.pendingDeletes, tableView.pendingInserts, tableView.rows, pkColumns])
 
+  const rowIndexByKey = useMemo(
+    () => new Map(displayRows.map((row, index) => [row.key, index])),
+    [displayRows]
+  )
+
+  const selectedRowSet = useMemo(() => new Set(selectedRowKeys), [selectedRowKeys])
+
+  const selectedDisplayRows = useMemo(() => {
+    const rowMap = new Map(displayRows.map((row) => [row.key, row]))
+    return selectedRowKeys
+      .map((rowKey) => rowMap.get(rowKey))
+      .filter((row): row is DisplayRow => !!row)
+  }, [displayRows, selectedRowKeys])
+
   const selectedDisplayRow = useMemo(() => {
-    if (!selectedRowKey) return displayRows[0] ?? null
-    return displayRows.find((row) => row.key === selectedRowKey) ?? displayRows[0] ?? null
-  }, [displayRows, selectedRowKey])
+    const preferredKey = activeRowKey && selectedRowSet.has(activeRowKey) ? activeRowKey : selectedRowKeys[0] ?? null
+    if (!preferredKey) return displayRows[0] ?? null
+    return displayRows.find((row) => row.key === preferredKey) ?? displayRows[0] ?? null
+  }, [activeRowKey, displayRows, selectedRowKeys, selectedRowSet])
 
   useEffect(() => {
     if (displayRows.length === 0) {
-      setSelectedRowKey(null)
+      setSelectedRowKeys([])
+      setActiveRowKey(null)
       return
     }
-    if (!selectedRowKey || !displayRows.some((row) => row.key === selectedRowKey)) {
-      setSelectedRowKey(displayRows[0].key)
+
+    const validKeys = selectedRowKeys.filter((rowKey) => rowIndexByKey.has(rowKey))
+    if (validKeys.length !== selectedRowKeys.length) {
+      setSelectedRowKeys(validKeys)
     }
-  }, [displayRows, selectedRowKey])
+
+    if (validKeys.length === 0) {
+      setSelectedRowKeys([displayRows[0].key])
+      setActiveRowKey(displayRows[0].key)
+      return
+    }
+
+    if (!activeRowKey || !rowIndexByKey.has(activeRowKey)) {
+      setActiveRowKey(validKeys[0])
+    }
+  }, [activeRowKey, displayRows, rowIndexByKey, selectedRowKeys])
+
+  useEffect(() => {
+    if (!dragSelection) return undefined
+
+    const stopDragSelection = (): void => setDragSelection(null)
+
+    window.addEventListener('mouseup', stopDragSelection)
+    window.addEventListener('blur', stopDragSelection)
+
+    return () => {
+      window.removeEventListener('mouseup', stopDragSelection)
+      window.removeEventListener('blur', stopDragSelection)
+    }
+  }, [dragSelection])
 
   useEffect(() => {
     const loadTableMeta = async (): Promise<void> => {
@@ -381,6 +435,133 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         ...view,
         pendingDeletes: nextDeletes
       }
+    })
+  }
+
+  const markRowsForDelete = (rows: DisplayRow[]): void => {
+    const draftIds = new Set(rows.filter((row) => row.isNew && row.draftId).map((row) => row.draftId as string))
+    const rowKeys = new Set(rows.filter((row) => !row.isNew && !row.isPendingDelete).map((row) => row.key))
+
+    if (draftIds.size === 0 && rowKeys.size === 0) return
+
+    updateView((view) => {
+      const nextPendingDeletes = { ...view.pendingDeletes }
+
+      view.rows.forEach((row, index) => {
+        const rowKey = buildRowKey(row, pkColumns, index)
+        if (rowKeys.has(rowKey)) {
+          nextPendingDeletes[rowKey] = row
+        }
+      })
+
+      return {
+        ...view,
+        pendingInserts: view.pendingInserts.filter((draft) => !draftIds.has(draft.id)),
+        pendingDeletes: nextPendingDeletes
+      }
+    })
+  }
+
+  const unmarkRowsForDelete = (rows: DisplayRow[]): void => {
+    const rowKeys = new Set(rows.filter((row) => !row.isNew && row.isPendingDelete).map((row) => row.key))
+    if (rowKeys.size === 0) return
+
+    updateView((view) => {
+      const nextPendingDeletes = { ...view.pendingDeletes }
+      rowKeys.forEach((rowKey) => {
+        delete nextPendingDeletes[rowKey]
+      })
+      return {
+        ...view,
+        pendingDeletes: nextPendingDeletes
+      }
+    })
+  }
+
+  const removeDraftRows = (rows: DisplayRow[]): void => {
+    const draftIds = new Set(rows.filter((row) => row.isNew && row.draftId).map((row) => row.draftId as string))
+    if (draftIds.size === 0) return
+
+    updateView((view) => ({
+      ...view,
+      pendingInserts: view.pendingInserts.filter((draft) => !draftIds.has(draft.id))
+    }))
+  }
+
+  const handleRowMouseDown = (
+    event: React.MouseEvent<HTMLTableRowElement>,
+    displayRow: DisplayRow
+  ): void => {
+    if (event.button !== 0 || isInteractiveTarget(event.target)) return
+
+    event.preventDefault()
+    setRowMenu(null)
+
+    if (event.shiftKey && activeRowKey && rowIndexByKey.has(activeRowKey)) {
+      setSelectedRowKeys(getRowRangeKeys(displayRows, rowIndexByKey, activeRowKey, displayRow.key))
+      setActiveRowKey(displayRow.key)
+      return
+    }
+
+    if (event.ctrlKey || event.metaKey) {
+      const mode: RowSelectionMode = selectedRowSet.has(displayRow.key) ? 'remove' : 'add'
+      setSelectedRowKeys(
+        applyDragSelection(displayRows, rowIndexByKey, selectedRowKeys, displayRow.key, displayRow.key, mode)
+      )
+      setActiveRowKey(displayRow.key)
+      setDragSelection({
+        anchorKey: displayRow.key,
+        baseKeys: selectedRowKeys,
+        mode
+      })
+      return
+    }
+
+    setSelectedRowKeys([displayRow.key])
+    setActiveRowKey(displayRow.key)
+    setDragSelection({
+      anchorKey: displayRow.key,
+      baseKeys: [displayRow.key],
+      mode: 'replace'
+    })
+  }
+
+  const handleRowMouseEnter = (displayRow: DisplayRow): void => {
+    if (!dragSelection) return
+
+    setSelectedRowKeys(
+      applyDragSelection(
+        displayRows,
+        rowIndexByKey,
+        dragSelection.baseKeys,
+        dragSelection.anchorKey,
+        displayRow.key,
+        dragSelection.mode
+      )
+    )
+    setActiveRowKey(displayRow.key)
+  }
+
+  const openRowContextMenu = (
+    event: React.MouseEvent<HTMLTableRowElement>,
+    displayRow: DisplayRow
+  ): void => {
+    event.preventDefault()
+
+    const nextKeys = selectedRowSet.has(displayRow.key) ? selectedRowKeys : [displayRow.key]
+    const rowMap = new Map(displayRows.map((row) => [row.key, row]))
+    const nextRows = nextKeys
+      .map((rowKey) => rowMap.get(rowKey))
+      .filter((row): row is DisplayRow => !!row)
+
+    if (!selectedRowSet.has(displayRow.key)) {
+      setSelectedRowKeys([displayRow.key])
+    }
+    setActiveRowKey(displayRow.key)
+    setRowMenu({
+      x: event.clientX,
+      y: event.clientY,
+      selectedRows: nextRows.length > 0 ? nextRows : [displayRow]
     })
   }
 
@@ -539,6 +720,25 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
       `${tab.tableName ?? 'table'}-filtered.csv`,
       rowsToCsv(tableView.columns, result.rows)
     )
+  }
+
+  const copySelectedInsertSql = async (rows: DisplayRow[]): Promise<void> => {
+    await copyText(rows.map((row) => buildInsertSql(tab.tableName!, tableView.columns, row.row, connection!.type)).join('\n'))
+  }
+
+  const copySelectedUpdateSql = async (rows: DisplayRow[]): Promise<void> => {
+    const sql = rows
+      .filter((row) => !row.isNew)
+      .map((row) => buildUpdateSql(tab.tableName!, tableView.columns, pkColumns, row.row, connection!.type))
+      .join('\n')
+    await copyText(sql)
+  }
+
+  const copySelectedCsv = async (rows: DisplayRow[]): Promise<void> => {
+    const csv = rows.length <= 1
+      ? buildCsv(tableView.columns, rows[0].row)
+      : rowsToCsv(tableView.columns, rows.map((row) => row.row))
+    await copyText(csv)
   }
 
   const canEditSelectedRow = !!selectedDisplayRow && !selectedDisplayRow.isPendingDelete && (selectedDisplayRow.isNew || hasPrimaryKey)
@@ -790,15 +990,13 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
               {displayRows.map((displayRow, rowIndex) => (
                 <tr
                   key={displayRow.key}
-                  onClick={() => setSelectedRowKey(displayRow.key)}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    setSelectedRowKey(displayRow.key)
-                    setRowMenu({ x: e.clientX, y: e.clientY, displayRow })
-                  }}
+                  onMouseDown={(event) => handleRowMouseDown(event, displayRow)}
+                  onMouseEnter={() => handleRowMouseEnter(displayRow)}
+                  onContextMenu={(event) => openRowContextMenu(event, displayRow)}
                   className={clsx(
                     'border-b border-app-border transition-colors',
-                    selectedDisplayRow?.key === displayRow.key && 'ring-1 ring-inset ring-accent-blue/50',
+                    selectedRowSet.has(displayRow.key) && 'bg-accent-blue/10',
+                    activeRowKey === displayRow.key && 'ring-1 ring-inset ring-accent-blue/50',
                     displayRow.isPendingDelete
                       ? 'bg-red-900/10 opacity-60'
                       : displayRow.isNew
@@ -910,7 +1108,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
                     ? 'text-accent-blue border-accent-blue/40 bg-accent-blue/10'
                     : 'text-emerald-500 border-emerald-500/40 bg-emerald-500/10'
                 )}>
-                  {selectedDisplayRow?.isPendingDelete ? '删除标记' : selectedDisplayRow?.isNew ? '新增草稿' : '可编辑'}
+                  已选 {selectedDisplayRows.length} 行{selectedDisplayRow ? ` · ${selectedDisplayRow.isPendingDelete ? '删除标记' : selectedDisplayRow.isNew ? '新增草稿' : '可编辑'}` : ''}
                 </span>
               </div>
 
@@ -921,6 +1119,11 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
                   <div className="mt-2 rounded border border-app-border bg-app-bg px-2.5 py-2 text-2xs text-text-secondary">
                     行键: <span className="text-text-primary break-all">{selectedDisplayRow.key}</span>
                   </div>
+                  {selectedDisplayRows.length > 1 && (
+                    <div className="mt-2 text-2xs text-text-muted">
+                      当前正在查看多选中的活动行，批量操作请直接在表格中右键。
+                    </div>
+                  )}
                   <div className="mt-2 space-y-2">
                     {tableView.columns.map((column) => {
                       const value = selectedDisplayRow.row[column.name] == null ? '' : String(selectedDisplayRow.row[column.name])
@@ -960,20 +1163,24 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         <RowContextMenu
           x={rowMenu.x}
           y={rowMenu.y}
-          displayRow={rowMenu.displayRow}
-          canCopyUpdate={hasPrimaryKey && !rowMenu.displayRow.isNew}
+          selectedRows={rowMenu.selectedRows}
+          canCopyUpdate={hasPrimaryKey && rowMenu.selectedRows.some((row) => !row.isNew)}
           onClose={() => setRowMenu(null)}
-          onToggleDelete={() => {
-            toggleDelete(rowMenu.displayRow)
+          onMarkDelete={() => {
+            markRowsForDelete(rowMenu.selectedRows)
             setRowMenu(null)
           }}
-          onCopyInsert={() =>
-            void copyText(buildInsertSql(tab.tableName!, tableView.columns, rowMenu.displayRow.row, connection.type))
-          }
-          onCopyUpdate={() =>
-            void copyText(buildUpdateSql(tab.tableName!, tableView.columns, pkColumns, rowMenu.displayRow.row, connection.type))
-          }
-          onCopyCsv={() => void copyText(buildCsv(tableView.columns, rowMenu.displayRow.row))}
+          onUnmarkDelete={() => {
+            unmarkRowsForDelete(rowMenu.selectedRows)
+            setRowMenu(null)
+          }}
+          onRemoveDraftRows={() => {
+            removeDraftRows(rowMenu.selectedRows)
+            setRowMenu(null)
+          }}
+          onCopyInsert={() => void copySelectedInsertSql(rowMenu.selectedRows)}
+          onCopyUpdate={() => void copySelectedUpdateSql(rowMenu.selectedRows)}
+          onCopyCsv={() => void copySelectedCsv(rowMenu.selectedRows)}
         />
       )}
     </div>
@@ -983,24 +1190,32 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
 function RowContextMenu({
   x,
   y,
-  displayRow,
+  selectedRows,
   canCopyUpdate,
   onClose,
-  onToggleDelete,
+  onMarkDelete,
+  onUnmarkDelete,
+  onRemoveDraftRows,
   onCopyInsert,
   onCopyUpdate,
   onCopyCsv
 }: {
   x: number
   y: number
-  displayRow: DisplayRow
+  selectedRows: DisplayRow[]
   canCopyUpdate: boolean
   onClose: () => void
-  onToggleDelete: () => void
+  onMarkDelete: () => void
+  onUnmarkDelete: () => void
+  onRemoveDraftRows: () => void
   onCopyInsert: () => void
   onCopyUpdate: () => void
   onCopyCsv: () => void
 }): JSX.Element {
+  const selectedNewRows = selectedRows.filter((row) => row.isNew)
+  const selectedPendingDeleteRows = selectedRows.filter((row) => !row.isNew && row.isPendingDelete)
+  const selectedActiveRows = selectedRows.filter((row) => !row.isNew && !row.isPendingDelete)
+
   return createPortal(
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
@@ -1008,12 +1223,17 @@ function RowContextMenu({
         className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[200px] text-xs"
         style={{ top: y, left: x }}
       >
+        {selectedRows.length > 1 && (
+          <div className="px-3 py-1.5 text-text-muted border-b border-app-border">
+            已选择 {selectedRows.length} 行
+          </div>
+        )}
         <button
           onClick={onCopyInsert}
           className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
         >
           <Copy size={12} />
-          复制 INSERT SQL
+          {selectedRows.length > 1 ? '复制选中行为 INSERT SQL' : '复制 INSERT SQL'}
         </button>
         <button
           onClick={onCopyUpdate}
@@ -1021,27 +1241,89 @@ function RowContextMenu({
           className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors disabled:opacity-40"
         >
           <Copy size={12} />
-          复制 UPDATE SQL
+          {selectedRows.length > 1 ? '复制选中行为 UPDATE SQL' : '复制 UPDATE SQL'}
         </button>
         <button
           onClick={onCopyCsv}
           className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
         >
           <Copy size={12} />
-          复制 CSV
+          {selectedRows.length > 1 ? '复制选中行为 CSV' : '复制 CSV'}
         </button>
-        <div className="border-t border-app-border my-1" />
-        <button
-          onClick={onToggleDelete}
-          className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
-        >
-          <X size={12} />
-          {displayRow.isPendingDelete ? '取消删除标记' : displayRow.isNew ? '移除新增行' : '标记删除'}
-        </button>
+        {(selectedActiveRows.length > 0 || selectedPendingDeleteRows.length > 0 || selectedNewRows.length > 0) && (
+          <div className="border-t border-app-border my-1" />
+        )}
+        {selectedActiveRows.length > 0 && (
+          <button
+            onClick={onMarkDelete}
+            className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+          >
+            <X size={12} />
+            {selectedActiveRows.length > 1 ? `标记选中 ${selectedActiveRows.length} 行删除` : '标记删除'}
+          </button>
+        )}
+        {selectedPendingDeleteRows.length > 0 && (
+          <button
+            onClick={onUnmarkDelete}
+            className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+          >
+            <X size={12} />
+            {selectedPendingDeleteRows.length > 1 ? `取消 ${selectedPendingDeleteRows.length} 行删除标记` : '取消删除标记'}
+          </button>
+        )}
+        {selectedNewRows.length > 0 && (
+          <button
+            onClick={onRemoveDraftRows}
+            className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+          >
+            <X size={12} />
+            {selectedNewRows.length > 1 ? `移除 ${selectedNewRows.length} 条新增草稿` : '移除新增行'}
+          </button>
+        )}
       </div>
     </>,
     document.body
   )
+}
+
+function getRowRangeKeys(
+  displayRows: DisplayRow[],
+  rowIndexByKey: Map<string, number>,
+  startKey: string,
+  endKey: string
+): string[] {
+  const startIndex = rowIndexByKey.get(startKey)
+  const endIndex = rowIndexByKey.get(endKey)
+  if (startIndex === undefined || endIndex === undefined) return [endKey]
+
+  const [from, to] = startIndex <= endIndex ? [startIndex, endIndex] : [endIndex, startIndex]
+  return displayRows.slice(from, to + 1).map((row) => row.key)
+}
+
+function applyDragSelection(
+  displayRows: DisplayRow[],
+  rowIndexByKey: Map<string, number>,
+  baseKeys: string[],
+  anchorKey: string,
+  targetKey: string,
+  mode: RowSelectionMode
+): string[] {
+  const rangeKeys = getRowRangeKeys(displayRows, rowIndexByKey, anchorKey, targetKey)
+  if (mode === 'replace') return rangeKeys
+
+  const nextKeys = new Set(baseKeys)
+  rangeKeys.forEach((rowKey) => {
+    if (mode === 'add') nextKeys.add(rowKey)
+    else nextKeys.delete(rowKey)
+  })
+
+  return displayRows.map((row) => row.key).filter((rowKey) => nextKeys.has(rowKey))
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement
+    ? !!target.closest('input, textarea, select, button, a, [contenteditable="true"]')
+    : false
 }
 
 function objectToEditableRow(row: Record<string, unknown>, columns: SchemaColumn[]): Record<string, string> {

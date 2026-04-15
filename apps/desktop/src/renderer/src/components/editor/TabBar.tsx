@@ -1,11 +1,21 @@
+import { useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Plus, X } from 'lucide-react'
 import { clsx } from 'clsx'
+import type { QueryTab } from '@renderer/stores/queryStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
+
+interface TabContextMenuState {
+  x: number
+  y: number
+  tabId: string
+}
 
 export function TabBar(): JSX.Element {
   const { tabs, activeTabId, newTab, closeTab, setActiveTab } = useQueryStore()
   const { activeConnectionId } = useConnectionStore()
+  const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
 
   const handleNewTab = (): void => {
     newTab(activeConnectionId ?? undefined)
@@ -20,6 +30,68 @@ export function TabBar(): JSX.Element {
     closeTab(tabId)
   }
 
+  const confirmCloseTabs = (targetTabs: QueryTab[]): boolean => {
+    if (targetTabs.length === 0) return false
+
+    const pendingCount = targetTabs.filter((tab) => tab.hasPendingChanges).length
+    if (pendingCount === 0) return true
+
+    const message = pendingCount === 1
+      ? '即将关闭的标签中有 1 个数据表页存在未提交修改，确认继续关闭吗？'
+      : `即将关闭的标签中有 ${pendingCount} 个数据表页存在未提交修改，确认继续关闭吗？`
+
+    return confirm(message)
+  }
+
+  const closeTabs = (targetTabs: QueryTab[]): void => {
+    if (!confirmCloseTabs(targetTabs)) return
+    targetTabs.forEach((tab) => closeTab(tab.id))
+  }
+
+  const handleCloseCurrent = (tabId: string): void => {
+    handleCloseTab(tabId)
+    setContextMenu(null)
+  }
+
+  const handleCloseOthers = (tabId: string): void => {
+    closeTabs(tabs.filter((tab) => tab.id !== tabId))
+    setContextMenu(null)
+  }
+
+  const handleCloseRight = (tabId: string): void => {
+    const currentIndex = tabs.findIndex((tab) => tab.id === tabId)
+    if (currentIndex === -1) return
+    closeTabs(tabs.slice(currentIndex + 1))
+    setContextMenu(null)
+  }
+
+  const handleCloseAll = (): void => {
+    closeTabs(tabs)
+    setContextMenu(null)
+  }
+
+  useEffect(() => {
+    if (!contextMenu) return undefined
+
+    const handleWindowClick = (): void => setContextMenu(null)
+    const handleEscape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setContextMenu(null)
+    }
+
+    window.addEventListener('click', handleWindowClick)
+    window.addEventListener('keydown', handleEscape)
+
+    return () => {
+      window.removeEventListener('click', handleWindowClick)
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [contextMenu])
+
+  const menuTab = contextMenu ? tabs.find((tab) => tab.id === contextMenu.tabId) ?? null : null
+  const menuTabIndex = menuTab ? tabs.findIndex((tab) => tab.id === menuTab.id) : -1
+  const hasRightTabs = menuTabIndex >= 0 && menuTabIndex < tabs.length - 1
+  const hasOtherTabs = tabs.length > 1
+
   return (
     <div className="flex items-center bg-app-header border-b border-app-border shrink-0 overflow-x-auto">
       <div className="flex items-center min-w-0">
@@ -27,6 +99,11 @@ export function TabBar(): JSX.Element {
           <div
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setActiveTab(tab.id)
+              setContextMenu({ x: event.clientX, y: event.clientY, tabId: tab.id })
+            }}
             className={clsx(
               'flex items-center gap-1.5 px-3 py-1.5 text-xs cursor-pointer border-r border-app-border shrink-0 group transition-colors max-w-[160px]',
               tab.id === activeTabId
@@ -62,6 +139,58 @@ export function TabBar(): JSX.Element {
       >
         <Plus size={14} />
       </button>
+
+      {contextMenu && menuTab && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setContextMenu(null)} onContextMenu={(event) => {
+            event.preventDefault()
+            setContextMenu(null)
+          }} />
+          <div
+            className="fixed z-50 min-w-[180px] rounded border border-app-border bg-app-sidebar py-1 text-xs shadow-2xl"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(event) => event.stopPropagation()}
+            onContextMenu={(event) => event.stopPropagation()}
+          >
+            <div className="border-b border-app-border px-3 py-1.5 text-text-muted">
+              {menuTab.title}
+            </div>
+            <button
+              onClick={() => handleCloseCurrent(menuTab.id)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-secondary transition-colors hover:bg-app-active hover:text-text-primary"
+            >
+              <X size={12} />
+              关闭当前页
+            </button>
+            <button
+              onClick={() => handleCloseOthers(menuTab.id)}
+              disabled={!hasOtherTabs}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-secondary transition-colors hover:bg-app-active hover:text-text-primary disabled:opacity-40"
+            >
+              <X size={12} />
+              关闭其他页面
+            </button>
+            <button
+              onClick={() => handleCloseRight(menuTab.id)}
+              disabled={!hasRightTabs}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-secondary transition-colors hover:bg-app-active hover:text-text-primary disabled:opacity-40"
+            >
+              <X size={12} />
+              关闭右侧页面
+            </button>
+            <div className="my-1 border-t border-app-border" />
+            <button
+              onClick={handleCloseAll}
+              disabled={tabs.length === 0}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-text-secondary transition-colors hover:bg-app-active hover:text-text-primary disabled:opacity-40"
+            >
+              <X size={12} />
+              关闭所有页面
+            </button>
+          </div>
+        </>,
+        document.body
+      )}
     </div>
   )
 }

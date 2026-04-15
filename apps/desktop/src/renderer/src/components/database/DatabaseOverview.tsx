@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Database, RefreshCw, Table2, Copy, Search, ArrowUpDown, ExternalLink, Download, Upload } from 'lucide-react'
+import { Database, RefreshCw, Table2, Copy, Search, ArrowUpDown, ExternalLink, Download, Upload, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { DBType } from '@shared/types/connection'
 import type { SchemaTable } from '@shared/types/query'
 import type { QueryTab } from '@renderer/stores/queryStore'
@@ -74,6 +74,8 @@ interface StatementStats {
   other: number
 }
 
+const PAGE_SIZE = 100
+
 export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
   const { connections } = useConnectionStore()
   const { openTableTab } = useQueryStore()
@@ -87,6 +89,7 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc')
+  const [currentPage, setCurrentPage] = useState(1)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [showExportDialog, setShowExportDialog] = useState(false)
   const [exportMode, setExportMode] = useState<ExportMode>('full')
@@ -117,7 +120,7 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
     }
   }, [databaseName, dbType, tab.connectionId])
 
-  const visibleRows = useMemo(() => {
+  const filteredRows = useMemo(() => {
     const keyword = search.trim().toLowerCase()
     const filtered = keyword
       ? rows.filter((row) =>
@@ -130,6 +133,13 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
 
     return [...filtered].sort((left, right) => compareRows(left, right, sortKey, sortDirection))
   }, [rows, search, sortKey, sortDirection])
+
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE) || 1)
+
+  const visibleRows = useMemo(() => {
+    const startIndex = (currentPage - 1) * PAGE_SIZE
+    return filteredRows.slice(startIndex, startIndex + PAGE_SIZE)
+  }, [currentPage, filteredRows])
 
   const visibleRowNames = useMemo(() => visibleRows.map((row) => row.name), [visibleRows])
   const visibleSelectedCount = useMemo(
@@ -149,7 +159,18 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
   useEffect(() => {
     setSelectedTableNames([])
     setExportSelectedOnly(false)
+    setCurrentPage(1)
   }, [tab.id, databaseName])
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [search, sortKey, sortDirection])
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages)
+    }
+  }, [currentPage, totalPages])
 
   const copyDatabaseName = async (): Promise<void> => {
     if (!databaseName) return
@@ -270,7 +291,7 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
           <div className="min-w-0">
             <div className="text-sm font-semibold text-text-primary truncate">{databaseName || '数据库概览'}</div>
             <div className="text-xs text-text-muted truncate">
-              {visibleRows.length}/{rows.length} 张表 · 估算 {summary.totalRows} 行 · 总大小 {formatBytes(summary.totalSize)}
+              {filteredRows.length}/{rows.length} 张表 · 第 {currentPage}/{totalPages} 页 · 每页 {PAGE_SIZE} 条 · 估算 {summary.totalRows} 行 · 总大小 {formatBytes(summary.totalSize)}
             </div>
           </div>
           <button
@@ -325,6 +346,27 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
             清空
           </button>
         )}
+        <div className="ml-auto flex items-center gap-2 text-xs text-text-secondary">
+          <button
+            onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+            disabled={currentPage <= 1}
+            className="p-1.5 rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40"
+            title="上一页"
+          >
+            <ChevronLeft size={12} />
+          </button>
+          <span>
+            第 {currentPage} / {totalPages} 页
+          </span>
+          <button
+            onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+            disabled={currentPage >= totalPages}
+            className="p-1.5 rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40"
+            title="下一页"
+          >
+            <ChevronRight size={12} />
+          </button>
+        </div>
       </div>
 
       <input ref={fileInputRef} type="file" accept=".sql,.txt" className="hidden" onChange={handleImportFile} />
@@ -355,7 +397,7 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
                 <span>只导出选中表</span>
               </label>
               <div className="text-2xs text-text-muted mt-1">
-                当前已选 {selectedTotal} 张表（当前筛选视图中选中 {visibleSelectedCount}/{visibleRowNames.length}）
+                当前已选 {selectedTotal} 张表（当前页选中 {visibleSelectedCount}/{visibleRowNames.length}）
               </div>
             </div>
           </div>
@@ -457,7 +499,7 @@ export function DatabaseOverview({ tab }: DatabaseOverviewProps): JSX.Element {
               <tr>
                 <td colSpan={13} className="px-4 py-8 text-center text-text-muted">加载中...</td>
               </tr>
-            ) : visibleRows.length === 0 ? (
+            ) : filteredRows.length === 0 ? (
               <tr>
                 <td colSpan={13} className="px-4 py-8 text-center text-text-muted">
                   {rows.length === 0 ? '当前数据库暂无数据表信息' : '没有匹配的表'}
