@@ -324,11 +324,16 @@ export function ERDiagramWorkbench({ connectionId, databases }: Props): JSX.Elem
 
   const onNodeMouseDown = (event: ReactMouseEvent, tableName: string): void => {
     const node = nodeMap.get(tableName)
+    const container = viewportRef.current
     if (!node) return
+    if (!container) return
+    const rect = container.getBoundingClientRect()
+    const pointerX = event.clientX - rect.left + container.scrollLeft
+    const pointerY = event.clientY - rect.top + container.scrollTop
     dragRef.current = {
       tableName,
-      offsetX: event.clientX - node.x,
-      offsetY: event.clientY - node.y
+      offsetX: pointerX - node.x,
+      offsetY: pointerY - node.y
     }
     setDragPreview({ tableName, x: node.x, y: node.y })
     event.preventDefault()
@@ -337,9 +342,14 @@ export function ERDiagramWorkbench({ connectionId, databases }: Props): JSX.Elem
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent): void => {
       if (!dragRef.current) return
+      const container = viewportRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
       const { tableName, offsetX, offsetY } = dragRef.current
-      const nextX = Math.max(16, event.clientX - offsetX)
-      const nextY = Math.max(16, event.clientY - offsetY)
+      const pointerX = event.clientX - rect.left + container.scrollLeft
+      const pointerY = event.clientY - rect.top + container.scrollTop
+      const nextX = Math.max(16, pointerX - offsetX)
+      const nextY = Math.max(16, pointerY - offsetY)
       pendingPositionRef.current = { tableName, x: nextX, y: nextY }
       if (rafRef.current !== null) return
       rafRef.current = window.requestAnimationFrame(() => {
