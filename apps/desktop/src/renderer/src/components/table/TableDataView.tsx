@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { RefreshCw, Plus, Save, Copy, Search, ChevronLeft, ChevronRight, X, Filter, Download, Trash2, Database, Rows3, HardDrive, Info, Braces } from 'lucide-react'
+import { RefreshCw, Plus, Save, Copy, Search, ChevronLeft, ChevronRight, X, Filter, Download, Trash2, Database, Rows3, HardDrive, Info, Braces, Settings2 } from 'lucide-react'
+import { TableDesigner } from '@renderer/components/designer/TableDesigner'
 import { clsx } from 'clsx'
 import type { SchemaColumn } from '@shared/types/query'
 import type { DBType } from '@shared/types/connection'
@@ -89,6 +90,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
   const [metaError, setMetaError] = useState<string | null>(null)
   const [showDetailsPanel, setShowDetailsPanel] = useState(true)
   const [jsonViewField, setJsonViewField] = useState<{ name: string; value: string } | null>(null)
+  const [showDesigner, setShowDesigner] = useState(false)
 
   const dbType = connection?.type ?? 'mysql'
   const pkColumns = useMemo(
@@ -768,6 +770,14 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <button
+            onClick={() => setShowDesigner(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors"
+            title="设计表结构"
+          >
+            <Settings2 size={12} />
+            设计表
+          </button>
+          <button
             onClick={addDraftRow}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors"
           >
@@ -1241,6 +1251,14 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
           </div>
         </div>,
         document.body
+      )}
+      {showDesigner && tab.connectionId && tab.tableName && (
+        <TableDesigner
+          connectionId={tab.connectionId}
+          table={tab.tableName}
+          database={tab.selectedDatabase ?? connection?.database ?? ''}
+          onClose={() => setShowDesigner(false)}
+        />
       )}
     </div>
   )
