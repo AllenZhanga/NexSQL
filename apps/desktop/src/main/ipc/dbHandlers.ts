@@ -27,6 +27,7 @@ import {
   dropDatabase,
   alterDatabaseCharset 
 } from '../db/QueryExecutor'
+import { deleteRedisKey, getRedisKeyDetail, getRedisKeys } from '../db/redis'
 
 export function registerDbHandlers(): void {
   ipcMain.handle('db:listConnections', async () => {
@@ -133,6 +134,27 @@ export function registerDbHandlers(): void {
     'db:getHistory',
     async (_event, connectionId?: string, limit?: number) => {
       return getHistory(connectionId, limit)
+    }
+  )
+
+  ipcMain.handle(
+    'db:getRedisKeys',
+    async (_event, connectionId: string, pattern?: string, database?: string) => {
+      return getRedisKeys(connectionId, pattern, database)
+    }
+  )
+
+  ipcMain.handle(
+    'db:getRedisKeyDetail',
+    async (_event, connectionId: string, key: string, database?: string) => {
+      return getRedisKeyDetail(connectionId, key, database)
+    }
+  )
+
+  ipcMain.handle(
+    'db:deleteRedisKey',
+    async (_event, connectionId: string, key: string, database?: string) => {
+      return deleteRedisKey(connectionId, key, database)
     }
   )
 

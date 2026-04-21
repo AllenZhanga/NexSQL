@@ -1,4 +1,4 @@
-﻿import { createPortal } from 'react-dom'
+import { createPortal } from 'react-dom'
 import { useState, useRef } from 'react'
 import { Circle, Plug, Trash2, Edit2, Copy, Download, Upload } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -8,12 +8,13 @@ import { useUIStore } from '@renderer/stores/uiStore'
 import { useT } from '@renderer/stores/i18nStore'
 import type { ConnectionConfig, ConnectionStatus } from '@shared/types/connection'
 
-const DB_ICONS: Record<string, string> = { mysql: 'M', postgresql: 'P', mssql: 'S', sqlite: 'L' }
+const DB_ICONS: Record<string, string> = { mysql: 'M', postgresql: 'P', mssql: 'S', sqlite: 'L', redis: 'R' }
 const DB_COLORS: Record<string, string> = {
   mysql: 'text-orange-400',
   postgresql: 'text-blue-400',
   mssql: 'text-red-400',
-  sqlite: 'text-green-400'
+  sqlite: 'text-green-400',
+  redis: 'text-rose-400'
 }
 
 function StatusDot({ status }: { status: ConnectionStatus }): JSX.Element {
@@ -29,26 +30,49 @@ function StatusDot({ status }: { status: ConnectionStatus }): JSX.Element {
 
 interface CtxMenu { x: number; y: number; conn: ConnectionConfig }
 
-function ConnContextMenu({ menu, onClose, onConnect, onEdit, onDuplicate, onDelete }: {
+function ConnContextMenu({
+  menu,
+  onClose,
+  onConnect,
+  onEdit,
+  onDuplicate,
+  onDelete,
+  onOpenRedisConsole,
+  onOpenRedisBrowser
+}: {
   menu: CtxMenu
   onClose: () => void
   onConnect: () => void
   onEdit: () => void
   onDuplicate: () => void
   onDelete: () => void
+  onOpenRedisConsole: () => void
+  onOpenRedisBrowser: () => void
 }): JSX.Element {
   const t = useT()
-  const items = [
-    { label: t('conn.connectBtn'), action: onConnect },
-    { label: t('conn.editConnMenu'), action: onEdit },
-    { label: t('conn.copyConn'), action: onDuplicate },
-    { divider: true },
-    { label: t('conn.deleteConn'), action: onDelete, danger: true },
-  ]
+  const items = menu.conn.type === 'redis'
+    ? [
+        { label: t('conn.connectBtn'), action: onConnect },
+        { label: '打开 Redis Console', action: onOpenRedisConsole },
+        { label: '打开 Key Browser', action: onOpenRedisBrowser },
+        { divider: true },
+        { label: t('conn.editConnMenu'), action: onEdit },
+        { label: t('conn.copyConn'), action: onDuplicate },
+        { divider: true },
+        { label: t('conn.deleteConn'), action: onDelete, danger: true }
+      ]
+    : [
+        { label: t('conn.connectBtn'), action: onConnect },
+        { label: t('conn.editConnMenu'), action: onEdit },
+        { label: t('conn.copyConn'), action: onDuplicate },
+        { divider: true },
+        { label: t('conn.deleteConn'), action: onDelete, danger: true }
+      ]
+
   return createPortal(
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[160px] text-xs"
+      <div className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[180px] text-xs"
         style={{ top: menu.y, left: menu.x }}>
         <div className="px-3 py-1 text-text-muted text-2xs border-b border-app-border mb-1 truncate font-medium">{menu.conn.name}</div>
         {items.map((item, i) =>
@@ -72,35 +96,58 @@ function ConnContextMenu({ menu, onClose, onConnect, onEdit, onDuplicate, onDele
 export function ConnectionList(): JSX.Element {
   const t = useT()
   const { connections, statuses, activeConnectionId, connect, disconnect, deleteConnection, duplicateConnection, loadConnections } = useConnectionStore()
-  const { loadSchema, updateTabConnection } = useQueryStore()
+  const { loadSchema, updateTabConnection, openRedisConsoleTab, openRedisBrowserTab } = useQueryStore()
   const { openConnectionDialog } = useUIStore()
   const { activeTabId } = useQueryStore()
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const openRedisWorkspace = (conn: ConnectionConfig, mode: 'console' | 'browser'): void => {
+    const database = conn.database ?? '0'
+    if (mode === 'console') {
+      openRedisConsoleTab(conn.id, database)
+      return
+    }
+    openRedisBrowserTab(conn.id, database)
+  }
+
   const handleConnect = async (id: string, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
     const status = statuses[id] ?? 'disconnected'
+    const conn = connections.find((item) => item.id === id)
     if (status === 'connected') {
       await disconnect(id)
     } else {
       try {
         await connect(id)
-        await loadSchema(id)
+        if (conn?.type !== 'redis') {
+          await loadSchema(id)
+        }
       } catch (err) {
         console.error('Connection failed:', err)
       }
     }
   }
 
-  const handleDoubleClick = async (id: string): Promise<void> => {
-    const status = statuses[id] ?? 'disconnected'
+  const handleDoubleClick = async (conn: ConnectionConfig): Promise<void> => {
+    const status = statuses[conn.id] ?? 'disconnected'
     if (status !== 'connected') {
-      try { await connect(id) } catch { return }
+      try {
+        await connect(conn.id)
+      } catch {
+        return
+      }
     }
-    await loadSchema(id)
-    useConnectionStore.getState().setActiveConnection(id)
-    if (activeTabId) updateTabConnection(activeTabId, id)
+
+    useConnectionStore.getState().setActiveConnection(conn.id)
+
+    if (conn.type === 'redis') {
+      openRedisWorkspace(conn, 'browser')
+      return
+    }
+
+    await loadSchema(conn.id)
+    if (activeTabId) updateTabConnection(activeTabId, conn.id)
   }
 
   const handleContextMenu = (e: React.MouseEvent, conn: ConnectionConfig): void => {
@@ -148,7 +195,6 @@ export function ConnectionList(): JSX.Element {
     e.target.value = ''
   }
 
-  // Group connections by group field
   const grouped = connections.reduce<Record<string, ConnectionConfig[]>>((acc, conn) => {
     const grp = conn.group || ''
     ;(acc[grp] = acc[grp] || []).push(conn)
@@ -158,7 +204,6 @@ export function ConnectionList(): JSX.Element {
 
   return (
     <div className="py-1">
-      {/* Header */}
       <div className="px-3 py-1 flex items-center justify-between">
         <span className="text-2xs text-text-muted uppercase tracking-wider font-semibold">{t('sidebar.connections')}</span>
         <div className="flex gap-1">
@@ -192,12 +237,12 @@ export function ConnectionList(): JSX.Element {
                 <div
                   key={conn.id}
                   onClick={() => useConnectionStore.getState().setActiveConnection(conn.id)}
-                  onDoubleClick={() => handleDoubleClick(conn.id)}
+                  onDoubleClick={() => void handleDoubleClick(conn)}
                   onContextMenu={(e) => handleContextMenu(e, conn)}
                   className={clsx('flex items-center gap-2 px-3 py-1.5 cursor-pointer group transition-colors',
                     isActive ? 'bg-app-active' : 'hover:bg-app-hover'
                   )}
-                  title="双击连接并展开 Schema / 右键更多选项"
+                  title={conn.type === 'redis' ? '双击连接并打开 Key Browser / 右键更多选项' : '双击连接并展开 Schema / 右键更多选项'}
                 >
                   <span className={clsx('text-2xs font-bold font-mono w-4 text-center shrink-0', DB_COLORS[conn.type] ?? 'text-text-muted')}>
                     {DB_ICONS[conn.type] ?? '?'}
@@ -214,16 +259,26 @@ export function ConnectionList(): JSX.Element {
                   </div>
                   <StatusDot status={status} />
                   <div className="hidden group-hover:flex items-center gap-0.5">
-                    <button onClick={(e) => handleConnect(conn.id, e)} title={status === 'connected' ? t('conn.disconnectBtn') : t('conn.connectBtn')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
+                    {conn.type === 'redis' && status === 'connected' && (
+                      <>
+                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'console') }} title="打开 Redis Console" className="p-0.5 rounded text-text-muted hover:text-text-primary">
+                          C
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'browser') }} title="打开 Key Browser" className="p-0.5 rounded text-text-muted hover:text-text-primary">
+                          K
+                        </button>
+                      </>
+                    )}
+                    <button onClick={(e) => void handleConnect(conn.id, e)} title={status === 'connected' ? t('conn.disconnectBtn') : t('conn.connectBtn')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
                       <Plug size={11} />
                     </button>
                     <button onClick={() => openConnectionDialog(conn.id)} title={t('conn.editConnMenu')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
                       <Edit2 size={11} />
                     </button>
-                    <button onClick={(e) => handleDuplicate(conn.id, e)} title={t('conn.copyConn')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
+                    <button onClick={(e) => void handleDuplicate(conn.id, e)} title={t('conn.copyConn')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
                       <Copy size={11} />
                     </button>
-                    <button onClick={() => handleDelete(conn.id)} title={t('conn.deleteConn')} className="p-0.5 rounded text-text-muted hover:text-accent-red">
+                    <button onClick={() => void handleDelete(conn.id)} title={t('conn.deleteConn')} className="p-0.5 rounded text-text-muted hover:text-accent-red">
                       <Trash2 size={11} />
                     </button>
                   </div>
@@ -237,10 +292,12 @@ export function ConnectionList(): JSX.Element {
         <ConnContextMenu
           menu={ctxMenu}
           onClose={() => setCtxMenu(null)}
-          onConnect={() => { const e = { stopPropagation: () => {} } as React.MouseEvent; handleConnect(ctxMenu.conn.id, e) }}
+          onConnect={() => { const e = { stopPropagation: () => {} } as React.MouseEvent; void handleConnect(ctxMenu.conn.id, e) }}
           onEdit={() => openConnectionDialog(ctxMenu.conn.id)}
-          onDuplicate={() => handleDuplicate(ctxMenu.conn.id)}
-          onDelete={() => handleDelete(ctxMenu.conn.id)}
+          onDuplicate={() => void handleDuplicate(ctxMenu.conn.id)}
+          onDelete={() => void handleDelete(ctxMenu.conn.id)}
+          onOpenRedisConsole={() => openRedisWorkspace(ctxMenu.conn, 'console')}
+          onOpenRedisBrowser={() => openRedisWorkspace(ctxMenu.conn, 'browser')}
         />
       )}
     </div>

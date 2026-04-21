@@ -1,4 +1,4 @@
-export type DBType = 'mysql' | 'postgresql' | 'mssql' | 'sqlite'
+export type DBType = 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis'
 
 export interface SSHConfig {
   host: string

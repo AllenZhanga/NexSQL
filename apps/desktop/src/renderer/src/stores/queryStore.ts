@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { QueryResult, QueryHistoryEntry, DatabaseSchema, SchemaColumn } from '@shared/types/query'
 
-export type QueryTabType = 'query' | 'table' | 'database'
+export type QueryTabType = 'query' | 'table' | 'database' | 'redis-console' | 'redis-browser'
 export type TableSortDirection = 'asc' | 'desc'
 
 export interface TableSortRule {
@@ -54,6 +54,8 @@ export interface QueryTab {
   tableName?: string
   tableView?: TableViewState
   hasPendingChanges?: boolean
+  redisSearchPattern?: string
+  redisSelectedKey?: string | null
 }
 
 interface QueryState {
@@ -66,6 +68,8 @@ interface QueryState {
   newTab: (connectionId?: string) => string
   openTableTab: (connectionId: string, tableName: string, database?: string) => string
   openDatabaseTab: (connectionId: string, database: string) => string
+  openRedisConsoleTab: (connectionId: string, database?: string) => string
+  openRedisBrowserTab: (connectionId: string, database?: string) => string
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
   updateTabSQL: (tabId: string, sql: string) => void
@@ -151,6 +155,66 @@ export const useQueryStore = create<QueryState>((set, get) => ({
         pendingInserts: [],
         pendingDeletes: {}
       }
+    }
+    set((state) => ({ tabs: [...state.tabs, tab], activeTabId: id }))
+    return id
+  },
+
+  openRedisConsoleTab: (connectionId, database) => {
+    const existing = get().tabs.find(
+      (tab) =>
+        tab.type === 'redis-console' &&
+        tab.connectionId === connectionId &&
+        (tab.selectedDatabase ?? null) === (database ?? null)
+    )
+
+    if (existing) {
+      set({ activeTabId: existing.id })
+      return existing.id
+    }
+
+    const id = crypto.randomUUID()
+    const tab: QueryTab = {
+      id,
+      title: `Redis Console ${database ? `DB ${database}` : ''}`.trim(),
+      type: 'redis-console',
+      connectionId,
+      sql: '',
+      result: null,
+      isLoading: false,
+      error: null,
+      selectedDatabase: database ?? null
+    }
+    set((state) => ({ tabs: [...state.tabs, tab], activeTabId: id }))
+    return id
+  },
+
+  openRedisBrowserTab: (connectionId, database) => {
+    const existing = get().tabs.find(
+      (tab) =>
+        tab.type === 'redis-browser' &&
+        tab.connectionId === connectionId &&
+        (tab.selectedDatabase ?? null) === (database ?? null)
+    )
+
+    if (existing) {
+      set({ activeTabId: existing.id })
+      return existing.id
+    }
+
+    const id = crypto.randomUUID()
+    const tab: QueryTab = {
+      id,
+      title: `Key Browser ${database ? `DB ${database}` : ''}`.trim(),
+      type: 'redis-browser',
+      connectionId,
+      sql: '',
+      result: null,
+      isLoading: false,
+      error: null,
+      selectedDatabase: database ?? null,
+      redisSearchPattern: '*',
+      redisSelectedKey: null
     }
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: id }))
     return id

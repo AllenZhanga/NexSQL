@@ -4,6 +4,7 @@ import { MySQLDriver } from './mysql'
 import { PostgresDriver } from './postgres'
 import { MSSQLDriver } from './mssql'
 import { SQLiteDriver } from './sqlite'
+import { RedisDriver } from './redis'
 
 export function createDriver(config: ConnectionConfig, password: string): IDbDriver {
   switch (config.type) {
@@ -42,9 +43,19 @@ export function createDriver(config: ConnectionConfig, password: string): IDbDri
         filePath: config.filePath ?? ':memory:'
       })
 
+    case 'redis':
+      return new RedisDriver({
+        host: config.host ?? 'localhost',
+        port: config.port ?? 6379,
+        database: config.database ?? '0',
+        user: config.username ?? '',
+        password,
+        ssl: config.ssl
+      })
+
     default:
       throw new Error(`Unsupported database type: ${config.type}`)
   }
 }
 
-export { MySQLDriver, PostgresDriver, MSSQLDriver, SQLiteDriver }
+export { MySQLDriver, PostgresDriver, MSSQLDriver, SQLiteDriver, RedisDriver }

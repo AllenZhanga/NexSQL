@@ -13,11 +13,20 @@ interface TabContextMenuState {
 }
 
 export function TabBar(): JSX.Element {
-  const { tabs, activeTabId, newTab, closeTab, setActiveTab } = useQueryStore()
-  const { activeConnectionId } = useConnectionStore()
+  const { tabs, activeTabId, newTab, closeTab, setActiveTab, openRedisConsoleTab } = useQueryStore()
+  const { activeConnectionId, connections } = useConnectionStore()
   const [contextMenu, setContextMenu] = useState<TabContextMenuState | null>(null)
 
   const handleNewTab = (): void => {
+    const activeConnection = activeConnectionId
+      ? connections.find((item) => item.id === activeConnectionId)
+      : null
+
+    if (activeConnection?.type === 'redis') {
+      openRedisConsoleTab(activeConnection.id, activeConnection.database ?? '0')
+      return
+    }
+
     newTab(activeConnectionId ?? undefined)
   }
 

@@ -12,7 +12,7 @@ export function AIInputBar(): JSX.Element {
 
   const { isGenerating, generateSQL, loadConfig, config } = useAIStore()
   const { tabs, activeTabId, updateTabSQL } = useQueryStore()
-  const { activeConnectionId } = useConnectionStore()
+  const { activeConnectionId, connections } = useConnectionStore()
   const { setShowSettings } = useUIStore()
 
   useEffect(() => {
@@ -20,7 +20,10 @@ export function AIInputBar(): JSX.Element {
   }, [])
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
-  const connectionId = activeTab?.connectionId ?? activeConnectionId
+  const fallbackConnection = activeConnectionId
+    ? connections.find((item) => item.id === activeConnectionId && item.type !== 'redis')
+    : null
+  const connectionId = activeTab?.connectionId ?? fallbackConnection?.id
 
   const isConfigured = config
     ? config.provider === 'ollama'
