@@ -74,7 +74,7 @@ export class RedisDriver implements IDbDriver {
   }
 
   async getTableDDL(_table: string, _database?: string): Promise<string> {
-    throw new Error('Redis 不支持表结构 DDL')
+    throw new Error('Redis does not support table DDL')
   }
 
   async useDatabase(database: string): Promise<void> {

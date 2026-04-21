@@ -3,6 +3,7 @@ import { Loader2, RefreshCw, Search, Trash2 } from 'lucide-react'
 import type { RedisKeyDetail, RedisKeySummary } from '@shared/types/redis'
 import { clsx } from 'clsx'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
+import { useT } from '@renderer/stores/i18nStore'
 import { useQueryStore, type QueryTab } from '@renderer/stores/queryStore'
 
 interface RedisKeyBrowserViewProps {
@@ -11,6 +12,7 @@ interface RedisKeyBrowserViewProps {
 
 export function RedisKeyBrowserView({ tab }: RedisKeyBrowserViewProps): JSX.Element {
   const { connections } = useConnectionStore()
+  const t = useT()
   const { patchTab, updateTabDatabase } = useQueryStore()
   const connection = useMemo(
     () => connections.find((item) => item.id === tab.connectionId) ?? null,
@@ -92,7 +94,7 @@ export function RedisKeyBrowserView({ tab }: RedisKeyBrowserViewProps): JSX.Elem
 
   const handleDelete = async (): Promise<void> => {
     if (!tab.connectionId || !tab.redisSelectedKey || !window.db) return
-    const confirmed = confirm(`确认删除 Redis Key “${tab.redisSelectedKey}” 吗？`)
+    const confirmed = confirm(t('redis.keyBrowser.deleteConfirm').replace('{{key}}', tab.redisSelectedKey))
     if (!confirmed) return
     await window.db.deleteRedisKey(tab.connectionId, tab.redisSelectedKey, selectedDatabase)
     patchTab(tab.id, { redisSelectedKey: null })
@@ -101,7 +103,7 @@ export function RedisKeyBrowserView({ tab }: RedisKeyBrowserViewProps): JSX.Elem
   }
 
   if (!connection) {
-    return <div className="flex h-full items-center justify-center text-sm text-text-muted">未找到 Redis 连接。</div>
+    return <div className="flex h-full items-center justify-center text-sm text-text-muted">{t('redis.keyBrowser.connectionMissing')}</div>
   }
 
   return (
@@ -129,7 +131,7 @@ export function RedisKeyBrowserView({ tab }: RedisKeyBrowserViewProps): JSX.Elem
                 void loadKeys()
               }
             }}
-            placeholder="匹配模式，例如 user:*"
+            placeholder={t('redis.keyBrowser.patternPlaceholder')}
             className="w-full rounded border border-app-border bg-app-input py-1 pl-7 pr-2 text-xs text-text-primary focus:border-accent-blue focus:outline-none"
           />
         </div>
@@ -138,22 +140,22 @@ export function RedisKeyBrowserView({ tab }: RedisKeyBrowserViewProps): JSX.Elem
           className="inline-flex items-center gap-1 rounded border border-app-border px-2 py-1 text-xs text-text-secondary transition-colors hover:border-accent-blue hover:text-text-primary"
         >
           <RefreshCw size={12} className={clsx(loadingKeys && 'animate-spin')} />
-          刷新
+          {t('redis.keyBrowser.refresh')}
         </button>
       </div>
 
       <div className="flex min-h-0 flex-1">
         <div className="flex min-h-0 w-[320px] flex-col border-r border-app-border bg-app-panel">
           <div className="border-b border-app-border px-3 py-2 text-xs text-text-muted">
-            {loadingKeys ? '正在加载 Key...' : `共 ${keys.length} 个 Key`}
+            {loadingKeys ? t('redis.keyBrowser.loadingKeys') : t('redis.keyBrowser.totalKeys').replace('{{count}}', String(keys.length))}
           </div>
           <div className="min-h-0 flex-1 overflow-auto">
             {error ? (
               <div className="p-3 text-xs text-accent-red">{error}</div>
             ) : loadingKeys ? (
-              <div className="flex items-center gap-2 p-3 text-xs text-text-muted"><Loader2 size={12} className="animate-spin" /> 加载中...</div>
+              <div className="flex items-center gap-2 p-3 text-xs text-text-muted"><Loader2 size={12} className="animate-spin" /> {t('redis.keyBrowser.loading')}</div>
             ) : keys.length === 0 ? (
-              <div className="p-3 text-xs text-text-muted">当前模式下没有匹配到任何 Key。</div>
+              <div className="p-3 text-xs text-text-muted">{t('redis.keyBrowser.empty')}</div>
             ) : (
               keys.map((item) => (
                 <button
@@ -180,16 +182,16 @@ export function RedisKeyBrowserView({ tab }: RedisKeyBrowserViewProps): JSX.Elem
           {detailError ? (
             <div className="p-4 text-sm text-accent-red">{detailError}</div>
           ) : loadingDetail ? (
-            <div className="flex items-center gap-2 p-4 text-sm text-text-muted"><Loader2 size={14} className="animate-spin" /> 正在读取 Key 详情...</div>
+            <div className="flex items-center gap-2 p-4 text-sm text-text-muted"><Loader2 size={14} className="animate-spin" /> {t('redis.keyBrowser.loadingDetail')}</div>
           ) : detail ? (
             <div className="space-y-4 p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-text-primary">{detail.key}</div>
                   <div className="mt-1 flex flex-wrap gap-2 text-xs text-text-muted">
-                    <span>类型：{detail.type}</span>
-                    <span>TTL：{detail.ttl}</span>
-                    {detail.size !== undefined && <span>大小：{detail.size} B</span>}
+                    <span>{t('redis.keyBrowser.type')}：{detail.type}</span>
+                    <span>{t('redis.keyBrowser.ttl')}：{detail.ttl}</span>
+                    {detail.size !== undefined && <span>{t('redis.keyBrowser.size')}：{detail.size} B</span>}
                   </div>
                 </div>
                 <button
@@ -197,13 +199,13 @@ export function RedisKeyBrowserView({ tab }: RedisKeyBrowserViewProps): JSX.Elem
                   className="inline-flex items-center gap-1 rounded border border-red-500/40 px-2 py-1 text-xs text-accent-red transition-colors hover:bg-red-900/20"
                 >
                   <Trash2 size={12} />
-                  删除 Key
+                  {t('redis.keyBrowser.delete')}
                 </button>
               </div>
               <pre className="overflow-auto rounded border border-app-border bg-app-panel p-3 text-xs text-text-secondary whitespace-pre-wrap break-all">{formatRedisValue(detail.value)}</pre>
             </div>
           ) : (
-            <div className="flex h-full items-center justify-center p-4 text-sm text-text-muted">请选择左侧的 Key 查看详情。</div>
+            <div className="flex h-full items-center justify-center p-4 text-sm text-text-muted">{t('redis.keyBrowser.selectKey')}</div>
           )}
         </div>
       </div>

@@ -53,8 +53,8 @@ function ConnContextMenu({
   const items = menu.conn.type === 'redis'
     ? [
         { label: t('conn.connectBtn'), action: onConnect },
-        { label: '打开 Redis Console', action: onOpenRedisConsole },
-        { label: '打开 Key Browser', action: onOpenRedisBrowser },
+        { label: t('redis.openConsole'), action: onOpenRedisConsole },
+        { label: t('redis.openBrowser'), action: onOpenRedisBrowser },
         { divider: true },
         { label: t('conn.editConnMenu'), action: onEdit },
         { label: t('conn.copyConn'), action: onDuplicate },
@@ -242,7 +242,7 @@ export function ConnectionList(): JSX.Element {
                   className={clsx('flex items-center gap-2 px-3 py-1.5 cursor-pointer group transition-colors',
                     isActive ? 'bg-app-active' : 'hover:bg-app-hover'
                   )}
-                  title={conn.type === 'redis' ? '双击连接并打开 Key Browser / 右键更多选项' : '双击连接并展开 Schema / 右键更多选项'}
+                  title={conn.type === 'redis' ? t('redis.connectionHint') : '双击连接并展开 Schema / 右键更多选项'}
                 >
                   <span className={clsx('text-2xs font-bold font-mono w-4 text-center shrink-0', DB_COLORS[conn.type] ?? 'text-text-muted')}>
                     {DB_ICONS[conn.type] ?? '?'}
@@ -261,11 +261,11 @@ export function ConnectionList(): JSX.Element {
                   <div className="hidden group-hover:flex items-center gap-0.5">
                     {conn.type === 'redis' && status === 'connected' && (
                       <>
-                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'console') }} title="打开 Redis Console" className="p-0.5 rounded text-text-muted hover:text-text-primary">
-                          C
+                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'console') }} title={t('redis.openConsole')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
+                          <span className="px-1 text-[10px] font-medium">Console</span>
                         </button>
-                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'browser') }} title="打开 Key Browser" className="p-0.5 rounded text-text-muted hover:text-text-primary">
-                          K
+                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'browser') }} title={t('redis.openBrowser')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
+                          <span className="px-1 text-[10px] font-medium">Keys</span>
                         </button>
                       </>
                     )}

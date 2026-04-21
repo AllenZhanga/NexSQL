@@ -3,6 +3,7 @@ import { Loader2, Play } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResultsPanel } from '@renderer/components/results/ResultsPanel'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
+import { useT } from '@renderer/stores/i18nStore'
 import { useQueryStore, type QueryTab } from '@renderer/stores/queryStore'
 
 interface RedisConsoleViewProps {
@@ -11,6 +12,7 @@ interface RedisConsoleViewProps {
 
 export function RedisConsoleView({ tab }: RedisConsoleViewProps): JSX.Element {
   const { connections, statuses } = useConnectionStore()
+  const t = useT()
   const { updateTabSQL, updateTabDatabase, executeQuery } = useQueryStore()
   const connection = useMemo(
     () => connections.find((item) => item.id === tab.connectionId) ?? null,
@@ -44,7 +46,7 @@ export function RedisConsoleView({ tab }: RedisConsoleViewProps): JSX.Element {
   }
 
   if (!connection) {
-    return <div className="flex h-full items-center justify-center text-sm text-text-muted">未找到 Redis 连接。</div>
+    return <div className="flex h-full items-center justify-center text-sm text-text-muted">{t('redis.console.connectionMissing')}</div>
   }
 
   return (
@@ -72,7 +74,7 @@ export function RedisConsoleView({ tab }: RedisConsoleViewProps): JSX.Element {
           className="inline-flex items-center gap-1 rounded bg-accent-blue px-2 py-1 text-xs text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {tab.isLoading ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-          执行命令
+          {t('redis.console.execute')}
         </button>
       </div>
 
@@ -86,10 +88,10 @@ export function RedisConsoleView({ tab }: RedisConsoleViewProps): JSX.Element {
               void handleRun()
             }
           }}
-          placeholder={'例如：PING\nGET my:key\nHGETALL user:1'}
+          placeholder={t('redis.console.placeholder')}
           className="min-h-[120px] w-full resize-none rounded border border-app-border bg-app-input px-3 py-2 font-mono text-xs text-text-primary focus:border-accent-blue focus:outline-none"
         />
-        <div className="mt-2 text-2xs text-text-muted">支持 Ctrl/Cmd + Enter 执行当前 Redis 命令。</div>
+        <div className="mt-2 text-2xs text-text-muted">{t('redis.console.shortcut')}</div>
       </div>
 
       <div className="min-h-0 flex-1">

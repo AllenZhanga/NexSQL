@@ -5,7 +5,7 @@ import { RedisDriver } from './drivers/redis'
 function getRedisDriver(connectionId: string): RedisDriver {
   const driver = getDriver(connectionId)
   if (!(driver instanceof RedisDriver)) {
-    throw new Error('当前连接不是 Redis')
+    throw new Error('Current connection is not Redis')
   }
   return driver
 }
