@@ -750,6 +750,72 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
 
   const canEditSelectedRow = !!selectedDisplayRow && !selectedDisplayRow.isPendingDelete && (selectedDisplayRow.isNew || hasPrimaryKey)
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement
+      const isInputFocused =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target.isContentEditable
+      if (isInputFocused) return
+
+      const isMeta = event.metaKey || event.ctrlKey
+
+      // Cmd/Ctrl+R: Refresh
+      if (isMeta && event.key === 'r') {
+        event.preventDefault()
+        void loadRows()
+        return
+      }
+
+      // Cmd/Ctrl+S: Commit changes
+      if (isMeta && event.key === 's') {
+        event.preventDefault()
+        if (tab.hasPendingChanges && !tab.isLoading) {
+          void commitChanges()
+        }
+        return
+      }
+
+      // Delete: Mark selected rows for delete
+      if (event.key === 'Delete') {
+        if (selectedDisplayRows.length > 0) {
+          event.preventDefault()
+          markRowsForDelete(selectedDisplayRows)
+        }
+        return
+      }
+
+      // Arrow Up/Down: Navigate rows
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        const currentIndex = activeRowKey != null ? (rowIndexByKey.get(activeRowKey) ?? -1) : -1
+        const nextIndex =
+          event.key === 'ArrowUp'
+            ? Math.max(0, currentIndex - 1)
+            : Math.min(displayRows.length - 1, currentIndex + 1)
+        if (nextIndex !== currentIndex) {
+          const nextKey = displayRows[nextIndex].key
+          setSelectedRowKeys([nextKey])
+          setActiveRowKey(nextKey)
+        }
+        return
+      }
+
+      // Escape: Close context menu
+      if (event.key === 'Escape') {
+        setRowMenu(null)
+        return
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [selectedDisplayRows, activeRowKey, rowIndexByKey, displayRows, tab.hasPendingChanges, tab.isLoading])
+
   return (
     <div className="flex flex-col h-full bg-app-bg">
       <div className="flex items-center justify-between px-4 py-3 bg-app-sidebar border-b border-app-border shrink-0 gap-3">
@@ -796,6 +862,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
             onClick={() => void commitChanges()}
             disabled={!tab.hasPendingChanges || tab.isLoading}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded bg-accent-blue text-white hover:bg-blue-600 transition-colors disabled:opacity-40"
+            title="提交修改 (⌘S / Ctrl+S)"
           >
             <Save size={12} />
             提交
@@ -900,7 +967,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
           <button
             onClick={() => void loadRows()}
             className="p-1.5 rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors"
-            title="刷新当前页"
+            title="刷新当前页 (⌘R / Ctrl+R)"
           >
             <RefreshCw size={12} />
           </button>
