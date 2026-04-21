@@ -24,7 +24,7 @@ export class RedisDriver implements IDbDriver {
       socket: {
         host: config.host,
         port: config.port,
-        tls: config.ssl
+        ...(config.ssl ? { tls: true as const } : {})
       },
       database: Number(this.currentDatabase),
       username: config.user || undefined,
