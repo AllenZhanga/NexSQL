@@ -6,7 +6,7 @@ import type {
   QueryHistoryEntry,
   SchemaColumn
 } from '@shared/types/query'
-import type { RedisKeyDetail, RedisKeySummary } from '@shared/types/redis'
+import type { RedisKeyDetail, RedisKeyPage, RedisKeyUpdateRequest } from '@shared/types/redis'
 import type {
   AIConfig,
   NLToSQLRequest,
@@ -102,14 +102,17 @@ const dbAPI = {
   getHistory: (connectionId?: string, limit?: number): Promise<QueryHistoryEntry[]> =>
     ipcRenderer.invoke('db:getHistory', connectionId, limit),
 
-  getRedisKeys: (connectionId: string, pattern?: string, database?: string): Promise<RedisKeySummary[]> =>
-    ipcRenderer.invoke('db:getRedisKeys', connectionId, pattern, database),
+  getRedisKeys: (connectionId: string, pattern?: string, database?: string, cursor?: string, pageSize?: number): Promise<RedisKeyPage> =>
+    ipcRenderer.invoke('db:getRedisKeys', connectionId, pattern, database, cursor, pageSize),
 
   getRedisKeyDetail: (connectionId: string, key: string, database?: string): Promise<RedisKeyDetail> =>
     ipcRenderer.invoke('db:getRedisKeyDetail', connectionId, key, database),
 
   deleteRedisKey: (connectionId: string, key: string, database?: string): Promise<number> =>
     ipcRenderer.invoke('db:deleteRedisKey', connectionId, key, database),
+
+  updateRedisKey: (request: RedisKeyUpdateRequest): Promise<RedisKeyDetail> =>
+    ipcRenderer.invoke('db:updateRedisKey', request),
 
   duplicateConnection: (id: string): Promise<ConnectionConfig> =>
     ipcRenderer.invoke('db:duplicateConnection', id),

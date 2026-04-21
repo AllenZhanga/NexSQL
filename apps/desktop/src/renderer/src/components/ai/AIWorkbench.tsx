@@ -39,11 +39,15 @@ export function AIWorkbench(): JSX.Element {
   const { loadSchema, getSchema, newTab, updateTabSQL } = useQueryStore()
 
   const connected = useMemo(
-    () => connections.filter((c) => (statuses[c.id] ?? 'disconnected') === 'connected'),
+    () => connections.filter((c) => c.type !== 'redis' && (statuses[c.id] ?? 'disconnected') === 'connected'),
     [connections, statuses]
   )
 
-  const connectionId = activeConnectionId ?? connected[0]?.id ?? null
+  const activeRelationalConnection = activeConnectionId
+    ? connections.find((item) => item.id === activeConnectionId && item.type !== 'redis' && (statuses[item.id] ?? 'disconnected') === 'connected') ?? null
+    : null
+
+  const connectionId = activeRelationalConnection?.id ?? connected[0]?.id ?? null
   const connection = connectionId ? connections.find((c) => c.id === connectionId) ?? null : null
 
   const schema = connectionId ? getSchema(connectionId) : null

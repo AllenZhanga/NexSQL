@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { QueryResult, QueryHistoryEntry, DatabaseSchema, SchemaColumn } from '@shared/types/query'
+import { useConnectionStore } from './connectionStore'
 
 export type QueryTabType = 'query' | 'table' | 'database' | 'redis-console' | 'redis-browser'
 export type TableSortDirection = 'asc' | 'desc'
@@ -56,6 +57,7 @@ export interface QueryTab {
   hasPendingChanges?: boolean
   redisSearchPattern?: string
   redisSelectedKey?: string | null
+  redisPageSize?: number
 }
 
 interface QueryState {
@@ -214,7 +216,8 @@ export const useQueryStore = create<QueryState>((set, get) => ({
       error: null,
       selectedDatabase: database ?? null,
       redisSearchPattern: '*',
-      redisSelectedKey: null
+      redisSelectedKey: null,
+      redisPageSize: 100
     }
     set((state) => ({ tabs: [...state.tabs, tab], activeTabId: id }))
     return id
@@ -341,6 +344,10 @@ export const useQueryStore = create<QueryState>((set, get) => ({
   loadSchema: async (connectionId, database) => {
     try {
       if (!window.db) return
+      const { connections, statuses } = useConnectionStore.getState()
+      const connection = connections.find((item) => item.id === connectionId)
+      if (!connection) return
+      if ((statuses[connectionId] ?? 'disconnected') !== 'connected') return
       const schema = await window.db.getSchema(connectionId, database)
       set((state) => ({
         schema: { ...state.schema, [connectionId]: schema }

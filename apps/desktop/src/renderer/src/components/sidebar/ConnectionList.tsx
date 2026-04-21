@@ -111,6 +111,11 @@ export function ConnectionList(): JSX.Element {
     openRedisBrowserTab(conn.id, database)
   }
 
+  const showConnectError = (err: unknown): void => {
+    const message = err instanceof Error ? err.message : String(err)
+    alert(`${t('conn.connectFailed')}\n${message}`)
+  }
+
   const handleConnect = async (id: string, e: React.MouseEvent): Promise<void> => {
     e.stopPropagation()
     const status = statuses[id] ?? 'disconnected'
@@ -125,6 +130,7 @@ export function ConnectionList(): JSX.Element {
         }
       } catch (err) {
         console.error('Connection failed:', err)
+        showConnectError(err)
       }
     }
   }
@@ -134,7 +140,8 @@ export function ConnectionList(): JSX.Element {
     if (status !== 'connected') {
       try {
         await connect(conn.id)
-      } catch {
+      } catch (err) {
+        showConnectError(err)
         return
       }
     }

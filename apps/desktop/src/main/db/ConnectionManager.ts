@@ -125,6 +125,31 @@ function decryptPassword(encrypted: Buffer | null): string {
 // Active connection pool
 const activeConnections = new Map<string, IDbDriver>()
 
+const CONNECTION_TEST_TIMEOUT_MS = 10000
+
+function getConnectionTimeoutMessage(config: Pick<ConnectionConfig, 'type' | 'host' | 'ssl'>): string {
+  const host = config.host?.trim().toLowerCase() ?? ''
+  if (config.type === 'redis' && host.endsWith('.aliyuncs.com')) {
+    return '连接超时，请检查主机、端口、密码或 TLS 配置。阿里云 Redis 还需确认连接地址类型正确，并将当前客户端出口 IP 加入白名单；若实例为 VPC 地址，则需要在同一 VPC 内访问。'
+  }
+
+  return '连接超时，请检查主机、端口、密码或 TLS 配置。'
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | null = null
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 export async function listConnections(): Promise<ConnectionConfig[]> {
   const db = getInternalDb()
   const rows = db.prepare('SELECT * FROM connections ORDER BY name').all() as ConnectionRow[]
@@ -240,16 +265,28 @@ export async function testConnection(
     createdAt: Date.now(),
     updatedAt: Date.now()
   }
+  let driver: IDbDriver | null = null
   try {
-    const driver = createDriver(tempConfig, passwordToUse)
-    await driver.testConnection()
-    await driver.disconnect()
+    driver = createDriver(tempConfig, passwordToUse)
+    await withTimeout(
+      driver.testConnection(),
+      CONNECTION_TEST_TIMEOUT_MS,
+      getConnectionTimeoutMessage(tempConfig)
+    )
     return { success: true, message: '连接成功', latencyMs: Date.now() - start }
   } catch (err) {
     return {
       success: false,
       message: err instanceof Error ? err.message : String(err),
       latencyMs: Date.now() - start
+    }
+  } finally {
+    if (driver) {
+      try {
+        await withTimeout(driver.disconnect(), 2000, 'disconnect timeout')
+      } catch {
+        // ignore cleanup failures from temporary test drivers
+      }
     }
   }
 }
@@ -264,8 +301,21 @@ export async function connectById(id: string): Promise<void> {
   const config = rowToConfig(row)
   const password = decryptPassword(row.password_encrypted)
   const driver = createDriver(config, password)
-  await driver.testConnection()
-  activeConnections.set(id, driver)
+  try {
+    await withTimeout(
+      driver.testConnection(),
+      CONNECTION_TEST_TIMEOUT_MS,
+      getConnectionTimeoutMessage(config)
+    )
+    activeConnections.set(id, driver)
+  } catch (err) {
+    try {
+      await withTimeout(driver.disconnect(), 2000, 'disconnect timeout')
+    } catch {
+      // ignore cleanup failures while connectById is failing
+    }
+    throw err
+  }
 }
 
 export async function reconnectById(id: string): Promise<void> {

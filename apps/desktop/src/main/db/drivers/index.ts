@@ -7,6 +7,10 @@ import { SQLiteDriver } from './sqlite'
 import { RedisDriver } from './redis'
 
 export function createDriver(config: ConnectionConfig, password: string): IDbDriver {
+  if (config.ssh) {
+    throw new Error('当前版本尚未实现 SSH 隧道连接。请直接连接目标地址，或先自行建立本地端口转发后再连接 127.0.0.1:本地端口。')
+  }
+
   switch (config.type) {
     case 'mysql':
       return new MySQLDriver({

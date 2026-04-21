@@ -1,4 +1,4 @@
-import type { RedisKeyDetail, RedisKeySummary } from '@shared/types/redis'
+import type { RedisKeyDetail, RedisKeyPage, RedisKeyUpdateRequest } from '@shared/types/redis'
 import { getDriver } from './ConnectionManager'
 import { RedisDriver } from './drivers/redis'
 
@@ -13,9 +13,11 @@ function getRedisDriver(connectionId: string): RedisDriver {
 export async function getRedisKeys(
   connectionId: string,
   pattern?: string,
-  database?: string
-): Promise<RedisKeySummary[]> {
-  return getRedisDriver(connectionId).getKeys(pattern, database)
+  database?: string,
+  cursor?: string,
+  pageSize?: number
+): Promise<RedisKeyPage> {
+  return getRedisDriver(connectionId).getKeysPage(cursor, pattern, database, pageSize)
 }
 
 export async function getRedisKeyDetail(
@@ -32,4 +34,14 @@ export async function deleteRedisKey(
   database?: string
 ): Promise<number> {
   return getRedisDriver(connectionId).deleteKey(key, database)
+}
+
+export async function updateRedisKey(request: RedisKeyUpdateRequest): Promise<RedisKeyDetail> {
+  return getRedisDriver(request.connectionId).updateKey(
+    request.key,
+    request.type,
+    request.value,
+    request.ttl,
+    request.database
+  )
 }
