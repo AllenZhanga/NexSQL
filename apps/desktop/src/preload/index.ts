@@ -6,6 +6,7 @@ import type {
   QueryHistoryEntry,
   SchemaColumn
 } from '@shared/types/query'
+import type { RedisKeyDetail, RedisKeySummary } from '@shared/types/redis'
 import type {
   AIConfig,
   NLToSQLRequest,
@@ -100,6 +101,15 @@ const dbAPI = {
 
   getHistory: (connectionId?: string, limit?: number): Promise<QueryHistoryEntry[]> =>
     ipcRenderer.invoke('db:getHistory', connectionId, limit),
+
+  getRedisKeys: (connectionId: string, pattern?: string, database?: string): Promise<RedisKeySummary[]> =>
+    ipcRenderer.invoke('db:getRedisKeys', connectionId, pattern, database),
+
+  getRedisKeyDetail: (connectionId: string, key: string, database?: string): Promise<RedisKeyDetail> =>
+    ipcRenderer.invoke('db:getRedisKeyDetail', connectionId, key, database),
+
+  deleteRedisKey: (connectionId: string, key: string, database?: string): Promise<number> =>
+    ipcRenderer.invoke('db:deleteRedisKey', connectionId, key, database),
 
   duplicateConnection: (id: string): Promise<ConnectionConfig> =>
     ipcRenderer.invoke('db:duplicateConnection', id),

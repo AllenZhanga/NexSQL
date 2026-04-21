@@ -1,5 +1,6 @@
 import type { ConnectionConfig, ConnectionFormData, ConnectionTestResult } from '@shared/types/connection'
 import type { QueryResult, DatabaseSchema, QueryHistoryEntry, SchemaColumn } from '@shared/types/query'
+import type { RedisKeyDetail, RedisKeySummary } from '@shared/types/redis'
 import type {
   AIConfig,
   NLToSQLRequest,
@@ -44,6 +45,9 @@ declare global {
       exportDatabaseSQL(connectionId: string, database?: string): Promise<string>
       importDatabaseSQL(connectionId: string, sql: string, database?: string): Promise<number>
       getHistory(connectionId?: string, limit?: number): Promise<QueryHistoryEntry[]>
+      getRedisKeys(connectionId: string, pattern?: string, database?: string): Promise<RedisKeySummary[]>
+      getRedisKeyDetail(connectionId: string, key: string, database?: string): Promise<RedisKeyDetail>
+      deleteRedisKey(connectionId: string, key: string, database?: string): Promise<number>
       duplicateConnection(id: string): Promise<ConnectionConfig>
       exportConnections(): Promise<string>
       importConnections(jsonStr: string): Promise<number>

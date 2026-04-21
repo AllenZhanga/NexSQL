@@ -100,6 +100,15 @@ export async function getSchema(
 ): Promise<DatabaseSchema> {
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
+    const config = getConnectionConfig(connectionId)
+
+    if (config.type === 'redis') {
+      const dbNames = await driver.getDatabases()
+      return {
+        connectionId,
+        databases: dbNames.map((name) => ({ name, tables: [] }))
+      }
+    }
 
     // When database is not explicitly specified, enumerate ALL databases
     // (do NOT fall back to config.database, otherwise users with a configured
@@ -161,6 +170,7 @@ export async function getTableColumns(
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
+    if (config.type === 'redis') return []
     const targetDb = database ?? config.database ?? ''
     const cols = await driver.getColumns(table, targetDb)
     return cols.map((c) => ({
@@ -182,6 +192,7 @@ export async function getTableIndexes(
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
+    if (config.type === 'redis') return []
     const targetDb = database ?? config.database ?? ''
     return driver.getIndexes(table, targetDb)
   })
@@ -195,6 +206,7 @@ export async function getTableDDL(
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
+    if (config.type === 'redis') throw new Error('Redis does not support table DDL')
     const targetDb = database ?? config.database ?? ''
     return driver.getTableDDL(table, targetDb)
   })
@@ -208,6 +220,7 @@ export async function exportTableSQL(
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
+    if (config.type === 'redis') throw new Error('Redis does not support table SQL export')
     const targetDb = database ?? config.database ?? ''
 
     const ddl = await driver.getTableDDL(table, targetDb)
@@ -231,7 +244,7 @@ export async function exportTableSQL(
   })
 }
 
-function quoteIdentifierByType(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite', name: string): string {
+function quoteIdentifierByType(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis', name: string): string {
   if (type === 'mssql') return escapeMSSQLIdentifier(name)
   if (type === 'postgresql' || type === 'sqlite') return escapePostgresIdentifier(name)
   return escapeMySQLIdentifier(name)
@@ -245,13 +258,13 @@ function toSqlLiteral(value: unknown): string {
   return `'${String(value).replace(/'/g, "''")}'`
 }
 
-function buildSelectAllSQL(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite', table: string): string {
+function buildSelectAllSQL(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis', table: string): string {
   const ident = quoteIdentifierByType(type, table)
   return `SELECT * FROM ${ident}`
 }
 
 function buildInsertSQL(
-  type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite',
+  type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis',
   table: string,
   columns: string[],
   row: Record<string, unknown>
@@ -353,8 +366,10 @@ export async function exportDatabaseSQL(
     const targetDb = database ?? config.database ?? ''
     const dbType = config.type
 
+    if (dbType === 'redis') throw new Error('Redis does not support database SQL export')
+
     if (!targetDb && dbType !== 'sqlite') {
-      throw new Error('请选择要导出的数据库')
+      throw new Error('Select a database to export')
     }
 
     if (targetDb) {
@@ -406,6 +421,7 @@ export async function importDatabaseSQL(
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
     const targetDb = database ?? config.database ?? ''
+    if (config.type === 'redis') throw new Error('Redis does not support SQL import')
     const statements = splitSqlStatements(sql)
 
     if (statements.length === 0) return 0
@@ -444,7 +460,8 @@ export async function createDatabase(
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
     const dbName = database.trim()
-    if (!dbName) throw new Error('数据库名不能为空')
+    if (!dbName) throw new Error('Database name is required')
+    if (config.type === 'redis') throw new Error('Redis does not support database creation')
 
     if (config.type === 'mysql') {
       const charsetSql = charset?.trim() ? ` CHARACTER SET ${charset.trim()}` : ''
@@ -463,7 +480,7 @@ export async function createDatabase(
       return
     }
 
-    throw new Error('当前数据库类型不支持创建数据库')
+    throw new Error('Current database type does not support database creation')
   })
 }
 
@@ -475,7 +492,8 @@ export async function dropDatabase(
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
     const dbName = database.trim()
-    if (!dbName) throw new Error('数据库名不能为空')
+    if (!dbName) throw new Error('Database name is required')
+    if (config.type === 'redis') throw new Error('Redis does not support database deletion')
 
     if (config.type === 'mysql') {
       // Avoid dropping the currently selected DB.
@@ -494,7 +512,7 @@ export async function dropDatabase(
       return
     }
 
-    throw new Error('当前数据库类型不支持删除数据库')
+    throw new Error('Current database type does not support database deletion')
   })
 }
 
@@ -511,11 +529,15 @@ export async function alterDatabaseCharset(
     const dbName = database.trim()
     const charsetName = charset.trim()
 
-    if (!dbName) throw new Error('数据库名不能为空')
-    if (!charsetName) throw new Error('字符集不能为空')
+    if (!dbName) throw new Error('Database name is required')
+    if (!charsetName) throw new Error('Charset is required')
+
+    if (config.type === 'redis') {
+      throw new Error('Redis does not support charset changes')
+    }
 
     if (config.type !== 'mysql') {
-      throw new Error('仅 MySQL/MariaDB 支持修改数据库字符集')
+      throw new Error('Only MySQL/MariaDB supports charset changes')
     }
 
     const collateSql = collation?.trim() ? ` COLLATE ${collation.trim()}` : ''

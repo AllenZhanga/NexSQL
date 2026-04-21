@@ -10,7 +10,8 @@ const DEFAULT_PORTS: Record<DBType, number> = {
   mysql: 3306,
   postgresql: 5432,
   mssql: 1433,
-  sqlite: 0
+  sqlite: 0,
+  redis: 6379
 }
 
 const EMPTY_FORM: ConnectionFormData = {
@@ -144,6 +145,7 @@ export function ConnectionDialog(): JSX.Element {
   }
 
   const isSqlite = form.type === 'sqlite'
+  const isRedis = form.type === 'redis'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">

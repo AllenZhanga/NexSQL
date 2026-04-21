@@ -46,7 +46,7 @@ export function QueryEditor(): JSX.Element {
     : false
 
   const connectedConnections = connections.filter(
-    (c) => (statuses[c.id] ?? 'disconnected') === 'connected'
+    (c) => c.type !== 'redis' && (statuses[c.id] ?? 'disconnected') === 'connected'
   )
 
   const editorFontSize = fontSize === 'small' ? 12 : fontSize === 'large' ? 16 : 14
