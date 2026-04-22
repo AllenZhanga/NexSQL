@@ -219,11 +219,11 @@ export function ConnectionDialog(): JSX.Element {
             </Field>
           ) : isRedis ? (
             <>
-              <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-100/90">
+              <div className="rounded-lg border border-app-border bg-accent-blue/10 p-3 text-xs text-text-secondary">
                 <div className="flex items-start gap-2">
-                  <Info size={14} className="mt-0.5 shrink-0 text-amber-300" />
+                  <Info size={14} className="mt-0.5 shrink-0 text-accent-blue" />
                   <div className="space-y-1.5 leading-5">
-                    <p className="font-medium text-amber-200">{t('redis.conn.title')}</p>
+                    <p className="font-medium text-text-primary">{t('redis.conn.title')}</p>
                     <p>{t('redis.conn.tipAuth')}</p>
                     <p>{t('redis.conn.tipRequirePass')}</p>
                     <p>{t('redis.conn.tipAcl')}</p>
@@ -274,7 +274,7 @@ export function ConnectionDialog(): JSX.Element {
               </label>
 
               {showSshUnsupported && (
-                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-text-primary">
                   {t('conn.sshUnsupported')}
                 </div>
               )}
@@ -284,7 +284,11 @@ export function ConnectionDialog(): JSX.Element {
                   className="w-full flex items-center gap-2 px-3 py-2 text-xs text-text-secondary hover:text-text-primary transition-colors">
                   {showSsh ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   <span className="font-medium">{t('conn.sshTunnel')}</span>
-                  {sshEnabled && <span className="ml-auto text-accent-green text-2xs">已启用</span>}
+                  {sshEnabled && (
+                    <span className="ml-auto inline-flex items-center rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-2xs text-emerald-500">
+                      已启用
+                    </span>
+                  )}
                 </button>
                 {showSsh && (
                   <div className="px-3 pb-3 space-y-2 border-t border-app-border">
@@ -400,7 +404,7 @@ export function ConnectionDialog(): JSX.Element {
               </label>
 
               {showSshUnsupported && (
-                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-text-primary">
                   {t('conn.sshUnsupported')}
                 </div>
               )}
@@ -411,7 +415,11 @@ export function ConnectionDialog(): JSX.Element {
                   className="w-full flex items-center gap-2 px-3 py-2 text-xs text-text-secondary hover:text-text-primary transition-colors">
                   {showSsh ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                   <span className="font-medium">{t('conn.sshTunnel')}</span>
-                  {sshEnabled && <span className="ml-auto text-accent-green text-2xs">已启用</span>}
+                  {sshEnabled && (
+                    <span className="ml-auto inline-flex items-center rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-2xs text-emerald-500">
+                      已启用
+                    </span>
+                  )}
                 </button>
                 {showSsh && (
                   <div className="px-3 pb-3 space-y-2 border-t border-app-border">
@@ -464,12 +472,14 @@ export function ConnectionDialog(): JSX.Element {
 
           {/* Test result */}
           {testResult && (
-            <div className={clsx('flex items-start gap-2 p-2 rounded text-xs',
+            <div className={clsx('flex items-start gap-2 p-2 rounded text-xs text-text-primary',
               testResult.success
-                ? 'bg-green-900/30 border border-green-700/50 text-accent-green'
-                : 'bg-red-900/30 border border-red-700/50 text-accent-red'
+                ? 'bg-emerald-500/10 border border-emerald-500/40'
+                : 'bg-red-900/10 border border-red-500/30'
             )}>
-              {testResult.success ? <CheckCircle2 size={13} className="shrink-0 mt-0.5" /> : <XCircle size={13} className="shrink-0 mt-0.5" />}
+              {testResult.success
+                ? <CheckCircle2 size={13} className="shrink-0 mt-0.5 text-emerald-500" />
+                : <XCircle size={13} className="shrink-0 mt-0.5 text-accent-red" />}
               {testResult.message}
             </div>
           )}

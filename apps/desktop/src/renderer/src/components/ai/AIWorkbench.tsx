@@ -528,7 +528,15 @@ function SummaryCard({ label, value, tone = 'neutral' }: { label: string; value:
   )
 }
 
-function TabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }): JSX.Element {
+function TabButton({
+  label,
+  active,
+  onClick
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}): JSX.Element {
   return (
     <button
       onClick={onClick}

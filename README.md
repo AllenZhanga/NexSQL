@@ -20,20 +20,19 @@
 ## English
 
 NexSQL is a cross-platform desktop database client built with Electron and React.
-It combines SQL workflow, table data editing, and AI-assisted query generation in one app.
+It brings SQL workflow, table data management, Redis key operations, and AI-assisted development into one app.
 
 ### Highlights
 
-- Multi-database support: MySQL, PostgreSQL, SQL Server (MSSQL), SQLite
-- AI-assisted SQL generation (OpenAI-compatible APIs and local Ollama)
-- Monaco editor with SQL autocomplete and selected-text execution
-- Table data tab with filtering, sorting, pagination, and staged CRUD
-- Row actions: copy INSERT SQL, copy UPDATE SQL, copy CSV
-- Export SQL to file and export table data to CSV
-- Schema explorer + table designer (columns, indexes, DDL preview)
-- Connection organization via groups/tags and optional SSH tunnel
-- Query history and encrypted local credential storage
-- App settings: language (EN/ZH), theme, font size
+- Multi-engine support: MySQL, PostgreSQL, SQL Server (MSSQL), SQLite, Redis
+- SQL editor: Monaco + SQL formatting + selected-text execution
+- Table data view: filtering, sorting, pagination, staged CRUD, CSV export
+- SQL helper actions: copy INSERT/UPDATE SQL, export SQL to file
+- Schema explorer and table designer: columns, indexes, DDL preview
+- AI workspace: NL2SQL, SQL optimization, schema design SQL, data dictionary generation
+- Semantic schema index and E-R relation modeling (manual + AI inference workflow)
+- Connection management: group/tag organization and encrypted credential storage
+- App preferences: language (EN/ZH), theme, editor font size
 
 ### Architecture
 
@@ -45,7 +44,7 @@ It combines SQL workflow, table data editing, and AI-assisted query generation i
 | Data grid | TanStack Table + virtualization |
 | State | Zustand |
 | Local storage | better-sqlite3 |
-| DB drivers | mysql2, pg, mssql, better-sqlite3 |
+| DB drivers | mysql2, pg, mssql, better-sqlite3, redis |
 
 ### Quick Start
 
@@ -55,11 +54,17 @@ Prerequisites:
 - pnpm >= 6
 
 ```bash
-git clone https://github.com/<your-org>/NexSQL.git
+git clone https://github.com/AllenZhanga/NexSQL.git
 cd NexSQL
 
 pnpm install
 pnpm dev
+```
+
+Alternative (desktop package only):
+
+```bash
+pnpm --filter nexsql-desktop dev
 ```
 
 ### Build
@@ -71,7 +76,10 @@ pnpm build:mac
 pnpm build:linux
 ```
 
-Build outputs are under `apps/desktop/dist/`.
+Build outputs:
+
+- Dev/compile output: `apps/desktop/out/`
+- Installer output (packaging scripts): `apps/desktop/release-prod/`
 
 ### Scripts
 
@@ -89,7 +97,7 @@ NexSQL/
 ├── apps/
 │   └── desktop/
 │       ├── src/
-│       │   ├── main/      # Electron main process (DB drivers, IPC, services)
+│       │   ├── main/      # Electron main process (DB drivers, IPC, AI/services)
 │       │   ├── preload/   # Bridge API exposed to renderer
 │       │   └── renderer/  # React application
 │       └── electron-builder.yml
@@ -105,6 +113,10 @@ Open AI settings in the app and configure one provider:
 - OpenAI-compatible endpoint (DeepSeek, Qwen, Moonshot, etc.)
 - Ollama local model
 
+### Known Limitations
+
+- SSH tunnel in connection config is not implemented yet. For now, use direct DB access or create local port forwarding manually.
+
 ### Contributing
 
 Issues and pull requests are welcome.
@@ -118,20 +130,19 @@ MIT. See [LICENSE](LICENSE).
 ## 中文
 
 NexSQL 是一个基于 Electron + React 的跨平台桌面数据库客户端。
-它将 SQL 编辑、表数据管理和 AI 辅助查询整合到一个应用中。
+它将 SQL 开发、表数据管理、Redis Key 管理和 AI 辅助能力整合到一个应用中。
 
 ### 核心能力
 
-- 多数据库支持：MySQL、PostgreSQL、SQL Server（MSSQL）、SQLite
-- AI 辅助写 SQL（支持 OpenAI 兼容接口与本地 Ollama）
-- Monaco 编辑器：SQL 自动补全、仅执行选中 SQL
-- 表数据标签页：筛选、排序、分页、暂存式 CRUD
-- 行级快捷操作：复制 INSERT SQL、UPDATE SQL、CSV
-- SQL 保存为文件、表数据导出 CSV
+- 多引擎支持：MySQL、PostgreSQL、SQL Server（MSSQL）、SQLite、Redis
+- SQL 编辑器：Monaco + SQL 格式化 + 选中执行
+- 表数据视图：筛选、排序、分页、暂存式 CRUD、CSV 导出
+- SQL 辅助操作：复制 INSERT/UPDATE SQL、SQL 落盘
 - 结构浏览与表设计器（列、索引、DDL 预览）
-- 连接分组/标签管理，支持 SSH 隧道
-- 查询历史、本地凭据加密存储
-- 应用设置：中英文、主题、字体大小
+- AI 工作台：自然语言生成 SQL、SQL 优化诊断、设计 SQL 生成、数据字典生成
+- 语义索引与 E-R 关系建模（手工连线 + AI 推断候选）
+- 连接管理：分组/标签组织、本地凭据加密存储
+- 应用设置：中英文、主题、编辑器字号
 
 ### 技术栈
 
@@ -143,7 +154,7 @@ NexSQL 是一个基于 Electron + React 的跨平台桌面数据库客户端。
 | 数据表格 | TanStack Table + 虚拟滚动 |
 | 状态管理 | Zustand |
 | 本地存储 | better-sqlite3 |
-| 数据库驱动 | mysql2、pg、mssql、better-sqlite3 |
+| 数据库驱动 | mysql2、pg、mssql、better-sqlite3、redis |
 
 ### 快速开始
 
@@ -160,6 +171,12 @@ pnpm install
 pnpm dev
 ```
 
+或仅启动桌面包：
+
+```bash
+pnpm --filter nexsql-desktop dev
+```
+
 ### 构建发布
 
 ```bash
@@ -169,7 +186,10 @@ pnpm build:mac
 pnpm build:linux
 ```
 
-构建产物目录：`apps/desktop/dist/`。
+构建产物目录：
+
+- 开发/编译输出：`apps/desktop/out/`
+- 安装包输出（打包脚本）：`apps/desktop/release-prod/`
 
 ### 常用脚本
 
@@ -187,7 +207,7 @@ NexSQL/
 ├── apps/
 │   └── desktop/
 │       ├── src/
-│       │   ├── main/      # 主进程（驱动、IPC、服务）
+│       │   ├── main/      # 主进程（驱动、IPC、AI/服务）
 │       │   ├── preload/   # 渲染进程桥接 API
 │       │   └── renderer/  # React 界面
 │       └── electron-builder.yml
@@ -202,6 +222,10 @@ NexSQL/
 - OpenAI
 - 兼容 OpenAI 协议的服务（如 DeepSeek、通义千问、Moonshot）
 - 本地 Ollama 模型
+
+### 当前限制
+
+- 连接配置中的 SSH 隧道能力暂未实现。当前可通过直连数据库，或先建立本地端口转发后再连接。
 
 ### 参与贡献
 

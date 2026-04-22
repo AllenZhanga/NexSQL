@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 type SidebarTab = 'connections' | 'history'
-type WindowTab = 'workspace' | 'ai-workbench'
+type WindowTab = 'workspace' | 'ai-workbench' | 'dev-workbench'
 
 interface UIState {
   sidebarWidth: number
