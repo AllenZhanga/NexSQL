@@ -3,6 +3,7 @@ import Database from 'better-sqlite3'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import type { QueryResult, QueryHistoryEntry, DatabaseSchema, DatabaseInfo, SchemaTable, SchemaColumn } from '@shared/types/query'
+import { formatDateTimeLocal } from '@shared/utils'
 import { getDriver, getConnectionConfig, reconnectById } from './ConnectionManager'
 import { driverResultToQueryResult } from './types'
 
@@ -235,6 +236,10 @@ export async function exportTableSQL(
         const v = row[c.name]
         if (v === null || v === undefined) return 'NULL'
         if (typeof v === 'number') return String(v)
+        if (v instanceof Date) {
+          const formatted = formatDateTimeLocal(v)
+          return formatted ? `'${formatted.replace(/'/g, "''")}'` : 'NULL'
+        }
         return `'${String(v).replace(/'/g, "''")}'`
       }).join(', ')
       return `INSERT INTO \`${table}\` (${cols}) VALUES (${vals});`
@@ -254,7 +259,10 @@ function toSqlLiteral(value: unknown): string {
   if (value === null || value === undefined) return 'NULL'
   if (typeof value === 'number' || typeof value === 'bigint') return String(value)
   if (typeof value === 'boolean') return value ? '1' : '0'
-  if (value instanceof Date) return `'${value.toISOString().replace(/'/g, "''")}'`
+  if (value instanceof Date) {
+    const formatted = formatDateTimeLocal(value)
+    return formatted ? `'${formatted.replace(/'/g, "''")}'` : 'NULL'
+  }
   return `'${String(value).replace(/'/g, "''")}'`
 }
 
