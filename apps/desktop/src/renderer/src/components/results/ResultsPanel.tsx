@@ -9,6 +9,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef } from 'react'
 import { Download, AlertCircle, CheckCircle2, Clock } from 'lucide-react'
 import type { QueryResult } from '@shared/types/query'
+import { formatCellValue } from '@shared/utils'
 import { clsx } from 'clsx'
 import { useAIStore } from '@renderer/stores/aiStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
@@ -191,7 +192,7 @@ function DataTable({ result }: { result: QueryResult }): JSX.Element {
           if (val === null || val === undefined) {
             return <span className="text-text-muted italic">NULL</span>
           }
-          return <span className="font-mono">{String(val)}</span>
+          return <span className="font-mono">{formatCellValue(val)}</span>
         }
       })),
     [result.columns, result.rows]

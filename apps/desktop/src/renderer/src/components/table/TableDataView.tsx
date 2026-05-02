@@ -4,6 +4,7 @@ import { RefreshCw, Plus, Save, Copy, Search, ChevronLeft, ChevronRight, X, Filt
 import { TableDesigner } from '@renderer/components/designer/TableDesigner'
 import { clsx } from 'clsx'
 import type { SchemaColumn } from '@shared/types/query'
+import { formatCellValue, formatDateTimeLocal } from '@shared/utils'
 import type { DBType } from '@shared/types/connection'
 import type { QueryTab, TableSortDirection, TableViewState, TableSortRule, TableColumnFilterRule } from '@renderer/stores/queryStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
@@ -1094,7 +1095,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
                   {tableView.columns.map((column) => {
                     const isEditing =
                       editingCell?.rowKey === displayRow.key && editingCell?.columnName === column.name
-                    const cellValue = displayRow.row[column.name] == null ? '' : String(displayRow.row[column.name])
+                    const cellValue = formatCellValue(displayRow.row[column.name])
                     return (
                       <td
                         key={column.name}
@@ -1509,6 +1510,10 @@ function sqlValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return 'NULL'
   if (typeof value === 'number' || typeof value === 'bigint') return String(value)
   if (typeof value === 'boolean') return value ? '1' : '0'
+  if (value instanceof Date) {
+    const formatted = formatDateTimeLocal(value)
+    return formatted ? `'${formatted.replace(/'/g, "''")}'` : 'NULL'
+  }
   return `'${String(value).replace(/'/g, "''")}'`
 }
 
