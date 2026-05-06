@@ -1506,7 +1506,22 @@ function quoteIdentifier(type: DBType, value: string): string {
   return `\`${value.replace(/\`/g, '``')}\``
 }
 
-function sqlValue(value: unknown): string {
+function isJsonColumnType(type?: string): boolean {
+  return /\bjsonb?\b/i.test(type ?? '')
+}
+
+function normalizeJsonSqlText(value: unknown): string {
+  if (typeof value === 'string') {
+    try {
+      return JSON.stringify(JSON.parse(value))
+    } catch {
+      return value
+    }
+  }
+  return JSON.stringify(value)
+}
+
+function sqlValue(value: unknown, columnType?: string): string {
   if (value === null || value === undefined || value === '') return 'NULL'
   if (typeof value === 'number' || typeof value === 'bigint') return String(value)
   if (typeof value === 'boolean') return value ? '1' : '0'
@@ -1514,12 +1529,15 @@ function sqlValue(value: unknown): string {
     const formatted = formatDateTimeLocal(value)
     return formatted ? `'${formatted.replace(/'/g, "''")}'` : 'NULL'
   }
+  if (isJsonColumnType(columnType)) {
+    return `'${normalizeJsonSqlText(value).replace(/'/g, "''")}'`
+  }
   return `'${String(value).replace(/'/g, "''")}'`
 }
 
 function buildWhereClause(columns: SchemaColumn[], row: Record<string, unknown>, type: DBType): string {
   return columns
-    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name])}`)
+    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name], column.type)}`)
     .join(' AND ')
 }
 
@@ -1531,7 +1549,7 @@ function buildInsertSql(
 ): string {
   const usedColumns = columns.filter((column) => row[column.name] !== undefined)
   const cols = usedColumns.map((column) => quoteIdentifier(type, column.name)).join(', ')
-  const values = usedColumns.map((column) => sqlValue(row[column.name])).join(', ')
+  const values = usedColumns.map((column) => sqlValue(row[column.name], column.type)).join(', ')
   return `INSERT INTO ${quoteIdentifier(type, tableName)} (${cols}) VALUES (${values});`
 }
 
@@ -1544,7 +1562,7 @@ function buildUpdateSql(
 ): string {
   const setClause = columns
     .filter((column) => !column.primaryKey)
-    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name])}`)
+    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name], column.type)}`)
     .join(', ')
   return `UPDATE ${quoteIdentifier(type, tableName)} SET ${setClause} WHERE ${buildWhereClause(pkColumns, row, type)};`
 }
