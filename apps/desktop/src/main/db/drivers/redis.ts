@@ -82,6 +82,10 @@ export class RedisDriver implements IDbDriver {
     throw new Error('Redis does not support table DDL')
   }
 
+  async transaction(_sqls: string[]): Promise<void> {
+    throw new Error('Redis does not support SQL transactions')
+  }
+
   async useDatabase(database: string): Promise<void> {
     await this.selectDatabase(database)
   }

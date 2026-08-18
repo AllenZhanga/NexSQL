@@ -23,3 +23,30 @@ export function formatCellValue(value: unknown): string {
   if (value instanceof Date) return formatDateTimeLocal(value)
   return String(value)
 }
+
+/**
+ * Renders a JS value as a SQL literal.
+ *
+ * `engine` controls string escaping:
+ * - 'mysql' also doubles backslashes, because MySQL treats backslash as an
+ *   escape character inside string literals (default sql_mode). Without this,
+ *   values containing backslashes would be silently corrupted on write/export.
+ * - every other engine only doubles single quotes (standard SQL).
+ */
+export function sqlLiteral(value: unknown, engine?: string): string {
+  if (value === null || value === undefined) return 'NULL'
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
+  if (typeof value === 'boolean') return value ? '1' : '0'
+  if (value instanceof Date) {
+    const formatted = formatDateTimeLocal(value)
+    return formatted ? quoteSqlString(formatted, engine) : 'NULL'
+  }
+  return quoteSqlString(String(value), engine)
+}
+
+function quoteSqlString(value: string, engine?: string): string {
+  if (engine === 'mysql') {
+    return "'" + value.replace(/\\/g, '\\\\').replace(/'/g, "''") + "'"
+  }
+  return "'" + value.replace(/'/g, "''") + "'"
+}

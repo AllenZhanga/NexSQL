@@ -1,4 +1,4 @@
-import { Pool } from 'pg'
+import { Pool, PoolClient } from 'pg'
 import type { IDbDriver, DriverResult, DriverTableInfo, DriverColumnInfo, DriverIndexInfo } from '../types'
 
 interface PgConfig {
@@ -31,6 +31,24 @@ export class PostgresDriver implements IDbDriver {
     })
   }
 
+  /**
+   * Acquires a client with the selected schema in search_path. The SET must
+   * happen on the SAME connection as the query: pool.query() picks any pooled
+   * connection, so a query could otherwise land on one with the wrong schema.
+   */
+  private async withScopedClient<T>(action: (client: PoolClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect()
+    try {
+      if (this.currentDatabase) {
+        const schema = this.currentDatabase.replace(/"/g, '""')
+        await client.query(`SET search_path TO "${schema}"`)
+      }
+      return await action(client)
+    } finally {
+      client.release()
+    }
+  }
+
   async testConnection(): Promise<void> {
     const client = await this.pool.connect()
     await client.query('SELECT 1')
@@ -38,16 +56,37 @@ export class PostgresDriver implements IDbDriver {
   }
 
   async execute(sql: string): Promise<DriverResult> {
-    const result = await this.pool.query(sql)
-    const columns = (result.fields || []).map((f) => ({
-      name: f.name,
-      type: String(f.dataTypeID)
-    }))
-    return {
-      columns,
-      rows: result.rows as Record<string, unknown>[],
-      rowCount: result.rowCount ?? result.rows.length
-    }
+    return this.withScopedClient(async (client) => {
+      const result = await client.query(sql)
+      const columns = (result.fields || []).map((f) => ({
+        name: f.name,
+        type: String(f.dataTypeID)
+      }))
+      return {
+        columns,
+        rows: result.rows as Record<string, unknown>[],
+        rowCount: result.rowCount ?? result.rows.length
+      }
+    })
+  }
+
+  async transaction(sqls: string[]): Promise<void> {
+    await this.withScopedClient(async (client) => {
+      await client.query('BEGIN')
+      try {
+        for (const statement of sqls) {
+          await client.query(statement)
+        }
+        await client.query('COMMIT')
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK')
+        } catch {
+          // ignore rollback failures while handling the original error
+        }
+        throw err
+      }
+    })
   }
 
   async getDatabases(): Promise<string[]> {
@@ -105,8 +144,10 @@ export class PostgresDriver implements IDbDriver {
     }))
   }
 
-  async useDatabase(_database: string): Promise<void> {
-    this.currentDatabase = _database
+  async useDatabase(database: string): Promise<void> {
+    // Only track the target schema here; the actual search_path SET is issued
+    // inside execute()/transaction() on the same connection that runs the query.
+    this.currentDatabase = database
   }
 
   async getIndexes(table: string, database?: string): Promise<DriverIndexInfo[]> {

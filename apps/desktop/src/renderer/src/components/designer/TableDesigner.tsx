@@ -1,8 +1,9 @@
-﻿import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, Plus, Trash2, RefreshCw, Play, Check, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SchemaColumn } from '@shared/types/query'
+import type { DBType } from '@shared/types/connection'
 
 // ── Internal types ───────────────────────────────────────────
 
@@ -52,22 +53,75 @@ function buildType(baseType: string, length: string): string {
   return l ? `${t}(${l})` : t
 }
 
-function colToSQL(col: ColumnDraft): string {
-  const q = (s: string): string => `\`${s}\``
+function quoteIdent(dbType: DBType, name: string): string {
+  if (dbType === 'mssql') return `[${name.replace(/]/g, ']]')}]`
+  if (dbType === 'postgresql' || dbType === 'sqlite') return `"${name.replace(/"/g, '""')}"`
+  return `\`${name.replace(/\`/g, '\`\`')}\``
+}
+
+/**
+ * True when a default-value input is a bare SQL expression/keyword/number and
+ * must NOT be wrapped in quotes (e.g. CURRENT_TIMESTAMP, now(), 0, or a value
+ * the user already quoted). Plain strings get quoted.
+ */
+function isBareDefault(value: string): boolean {
+  const v = value.trim()
+  if (!v) return true
+  if (/^[-+]?\d+(\.\d+)?$/.test(v)) return true
+  if (/^['"].*['"]$/s.test(v)) return true
+  if (/^(NULL|TRUE|FALSE|CURRENT_TIMESTAMP|CURRENT_DATE|CURRENT_TIME|CURRENT_USER|LOCALTIME|LOCALTIMESTAMP)$/i.test(v)) return true
+  if (/^[A-Za-z_][A-Za-z0-9_]*\(.*\)$/s.test(v)) return true
+  return false
+}
+
+function formatDefault(value: string): string {
+  const v = value.trim()
+  if (isBareDefault(v)) return v
+  return `'${v.replace(/'/g, "''")}'`
+}
+
+function colToSQL(col: ColumnDraft, dbType: DBType): string {
+  const q = (s: string): string => quoteIdent(dbType, s)
   const parts: string[] = [q(col.name), buildType(col.baseType, col.length)]
-  if (col.collation) parts.push(`CHARACTER SET ${col.collation.split('_')[0]} COLLATE ${col.collation}`)
+
+  if (dbType === 'postgresql') {
+    if (col.autoIncrement && /^BIGINT/i.test(col.baseType)) {
+      parts[1] = 'BIGSERIAL'
+    } else if (col.autoIncrement && /^(INT|INTEGER)/i.test(col.baseType)) {
+      parts[1] = 'SERIAL'
+    }
+  }
+
+  if (dbType === 'mysql' && col.collation) {
+    parts.push(`CHARACTER SET ${col.collation.split('_')[0]} COLLATE ${col.collation}`)
+  }
+
   if (col.primaryKey) {
     parts.push('NOT NULL')
-    if (col.autoIncrement) parts.push('AUTO_INCREMENT')
+    if (col.autoIncrement) {
+      if (dbType === 'mssql') {
+        parts.push('IDENTITY(1,1)')
+      } else if (dbType === 'sqlite' && /^(INT|INTEGER)/i.test(col.baseType)) {
+        return `${q(col.name)} INTEGER PRIMARY KEY AUTOINCREMENT`
+      } else {
+        parts.push('AUTO_INCREMENT')
+      }
+    }
     parts.push('PRIMARY KEY')
   } else {
     if (!col.nullable) parts.push('NOT NULL')
-    if (col.defaultValue !== '') parts.push(`DEFAULT '${col.defaultValue}'`)
+    if (col.defaultValue !== '') parts.push(`DEFAULT ${formatDefault(col.defaultValue)}`)
   }
+
   return parts.join(' ')
 }
 
+function colSignature(col: ColumnDraft): string {
+  return [col.name, buildType(col.baseType, col.length), col.nullable, col.primaryKey, col.autoIncrement, col.defaultValue, col.collation].join('|')
+}
+
 function generateAlterSQL(
+  dbType: DBType,
   tbl: string,
   db: string,
   origCols: ColumnDraft[],
@@ -76,7 +130,7 @@ function generateAlterSQL(
   draftIdxs: IndexDraft[]
 ): string {
   const stmts: string[] = []
-  const q = (s: string): string => `\`${s}\``
+  const q = (s: string): string => quoteIdent(dbType, s)
   const tblRef = db ? `${q(db)}.${q(tbl)}` : q(tbl)
 
   // Drop columns marked as deleted (that existed originally)
@@ -87,39 +141,76 @@ function generateAlterSQL(
   // Add new columns
   draftCols
     .filter((c) => c._isNew && !c._isDeleted)
-    .forEach((c) => stmts.push(`ALTER TABLE ${tblRef}\n  ADD COLUMN ${colToSQL(c)};`))
+    .forEach((c) => stmts.push(`ALTER TABLE ${tblRef} ADD COLUMN ${colToSQL(c, dbType)};`))
 
   // Modify existing columns
-  draftCols
-    .filter((c) => !c._isNew && !c._isDeleted)
-    .forEach((c) => {
-      const orig = origCols.find((o) => o._origName === c._origName)
-      if (!orig) return
-      const sig = (d: ColumnDraft): string =>
-        [d.name, buildType(d.baseType, d.length), d.nullable, d.primaryKey, d.autoIncrement, d.defaultValue, d.collation].join('|')
-      if (sig(orig) !== sig(c)) {
-        stmts.push(`ALTER TABLE ${tblRef}\n  CHANGE COLUMN ${q(c._origName)} ${colToSQL(c)};`)
+  const changed = draftCols.filter((c) => {
+    if (c._isNew || c._isDeleted) return false
+    const orig = origCols.find((o) => o._origName === c._origName)
+    return orig ? colSignature(orig) !== colSignature(c) : false
+  })
+
+  if (dbType === 'mysql') {
+    changed.forEach((c) => {
+      if (c._origName !== c.name) {
+        stmts.push(`ALTER TABLE ${tblRef} CHANGE COLUMN ${q(c._origName)} ${colToSQL(c, dbType)};`)
+      } else {
+        stmts.push(`ALTER TABLE ${tblRef} MODIFY COLUMN ${colToSQL(c, dbType)};`)
       }
     })
+  } else if (dbType === 'postgresql') {
+    changed.forEach((c) => {
+      const orig = origCols.find((o) => o._origName === c._origName)
+      if (orig && (c._origName !== c.name || orig.primaryKey !== c.primaryKey)) {
+        stmts.push('-- 注意: 字段重命名/主键变更需手动执行（ALTER TABLE ... RENAME / ADD|DROP CONSTRAINT）')
+      }
+      let type = buildType(c.baseType, c.length)
+      if (c.autoIncrement && /^BIGINT/i.test(c.baseType)) type = 'BIGSERIAL'
+      else if (c.autoIncrement && /^(INT|INTEGER)/i.test(c.baseType)) type = 'SERIAL'
+      stmts.push(`ALTER TABLE ${tblRef} ALTER COLUMN ${q(c.name)} TYPE ${type};`)
+      if (c.nullable) stmts.push(`ALTER TABLE ${tblRef} ALTER COLUMN ${q(c.name)} DROP NOT NULL;`)
+      else stmts.push(`ALTER TABLE ${tblRef} ALTER COLUMN ${q(c.name)} SET NOT NULL;`)
+      if (c.defaultValue !== '') stmts.push(`ALTER TABLE ${tblRef} ALTER COLUMN ${q(c.name)} SET DEFAULT ${formatDefault(c.defaultValue)};`)
+      else stmts.push(`ALTER TABLE ${tblRef} ALTER COLUMN ${q(c.name)} DROP DEFAULT;`)
+    })
+  } else if (dbType === 'mssql') {
+    changed.forEach((c) => {
+      if (c._origName !== c.name) {
+        stmts.push(`-- 注意: 字段重命名请使用 sp_rename '${tbl}.${c._origName}', '${c.name}', 'COLUMN'`)
+      }
+      let s = `ALTER TABLE ${tblRef} ALTER COLUMN ${q(c.name)} ${buildType(c.baseType, c.length)}`
+      if (!c.nullable) s += ' NOT NULL'
+      stmts.push(`${s};`)
+      if (c.defaultValue !== '') stmts.push(`ALTER TABLE ${tblRef} ADD CONSTRAINT DF_${c.name} DEFAULT ${formatDefault(c.defaultValue)} FOR ${q(c.name)};`)
+    })
+  } else {
+    // SQLite cannot alter existing columns in place
+    changed.forEach(() => {
+      stmts.push('-- SQLite 不支持直接修改已有字段，请使用重建表流程（导出 → 重建 → 导入）')
+    })
+  }
 
   // Drop indexes marked as deleted
   draftIdxs
     .filter((i) => i._isDeleted && !i._isNew && !i._isPrimary)
-    .forEach((i) => stmts.push(`DROP INDEX ${q(i.name)} ON ${tblRef};`))
+    .forEach((i) => {
+      if (dbType === 'postgresql' || dbType === 'sqlite') {
+        stmts.push(`DROP INDEX ${q(i.name)};`)
+      } else {
+        stmts.push(`DROP INDEX ${q(i.name)} ON ${tblRef};`)
+      }
+    })
 
   // Add new indexes
   draftIdxs
     .filter((i) => i._isNew && !i._isDeleted)
     .forEach((i) => {
       const prefix = i.type === 'UNIQUE' ? 'UNIQUE ' : ''
-      stmts.push(
-        `CREATE ${prefix}INDEX ${q(i.name)} ON ${tblRef} (${i.columns.map(q).join(', ')});`
-      )
+      stmts.push(`CREATE ${prefix}INDEX ${q(i.name)} ON ${tblRef} (${i.columns.map(q).join(', ')});`)
     })
 
   return stmts.length > 0 ? stmts.join('\n') : '-- 无变更'
 }
-
 // ── Common collations ─────────────────────────────────────────
 const COMMON_COLLATIONS = [
   'utf8mb4_unicode_ci', 'utf8mb4_unicode_520_ci', 'utf8mb4_general_ci', 'utf8mb4_bin',
@@ -140,13 +231,14 @@ interface TableDesignerProps {
   connectionId: string
   table: string
   database: string
+  dbType: DBType
   onClose: () => void
 }
 
 type LeftTab = 'columns' | 'indexes'
 type RightTab = 'ddl' | 'changes'
 
-export function TableDesigner({ connectionId, table, database, onClose }: TableDesignerProps): JSX.Element {
+export function TableDesigner({ connectionId, table, database, dbType, onClose }: TableDesignerProps): JSX.Element {
   const [leftTab, setLeftTab] = useState<LeftTab>('columns')
   const [rightTab, setRightTab] = useState<RightTab>('ddl')
   const [origCols, setOrigCols] = useState<ColumnDraft[]>([])
@@ -215,7 +307,7 @@ export function TableDesigner({ connectionId, table, database, onClose }: TableD
     loadData()
   }, [loadData])
 
-  const changeSQL = generateAlterSQL(table, database, origCols, draftCols, origIdxs, draftIdxs)
+  const changeSQL = generateAlterSQL(dbType, table, database, origCols, draftCols, origIdxs, draftIdxs)
   const hasChanges = changeSQL !== '-- 无变更'
 
   // Column helpers
@@ -326,6 +418,7 @@ export function TableDesigner({ connectionId, table, database, onClose }: TableD
         <div className="flex items-center justify-between px-4 py-2.5 border-b border-app-border shrink-0">
           <div className="flex items-center gap-3">
             <span className="text-sm font-semibold text-text-primary">设计表</span>
+            <span className="text-xs text-text-muted bg-app-hover px-2 py-0.5 rounded font-mono uppercase">{dbType}</span>
             <span className="text-xs text-text-muted bg-app-hover px-2 py-0.5 rounded font-mono">
               {database}.{table}
             </span>
@@ -401,7 +494,7 @@ export function TableDesigner({ connectionId, table, database, onClose }: TableD
                 加载中...
               </div>
             ) : leftTab === 'columns' ? (
-              <ColumnsEditor cols={draftCols} onUpdate={updateCol} onDelete={deleteCol} onAdd={addColumn} />
+              <ColumnsEditor cols={draftCols} dbType={dbType} onUpdate={updateCol} onDelete={deleteCol} onAdd={addColumn} />
             ) : (
               <IndexesEditor
                 idxs={draftIdxs}
@@ -460,11 +553,13 @@ export function TableDesigner({ connectionId, table, database, onClose }: TableD
 
 function ColumnsEditor({
   cols,
+  dbType,
   onUpdate,
   onDelete,
   onAdd,
 }: {
   cols: ColumnDraft[]
+  dbType: DBType
   onUpdate: (id: string, patch: Partial<ColumnDraft>) => void
   onDelete: (id: string) => void
   onAdd: () => void
@@ -483,7 +578,9 @@ function ColumnsEditor({
               <th className="text-center px-1 py-2 text-text-muted font-medium w-9">非空</th>
               <th className="text-center px-1 py-2 text-text-muted font-medium w-9">AI</th>
               <th className="text-left px-2 py-2 text-text-muted font-medium min-w-[70px]">默认值</th>
-              <th className="text-left px-2 py-2 text-text-muted font-medium min-w-[120px]">编码</th>
+              {dbType === 'mysql' && (
+                <th className="text-left px-2 py-2 text-text-muted font-medium min-w-[120px]">编码</th>
+              )}
               <th className="w-7" />
             </tr>
           </thead>
@@ -563,22 +660,24 @@ function ColumnsEditor({
                     className={clsx(cell, 'font-mono text-text-muted text-2xs')}
                   />
                 </td>
-                <td className="px-1 py-0.5">
-                  <select
-                    value={col.collation}
-                    onChange={(e) => onUpdate(col._id, { collation: e.target.value })}
-                    disabled={col._isDeleted}
-                    className={clsx(cell, 'font-mono text-text-muted text-2xs cursor-pointer')}
-                  >
-                    <option value="">—</option>
-                    {COMMON_COLLATIONS.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                    {col.collation && !COMMON_COLLATIONS.includes(col.collation) && (
-                      <option value={col.collation}>{col.collation}</option>
-                    )}
-                  </select>
-                </td>
+                {dbType === 'mysql' && (
+                  <td className="px-1 py-0.5">
+                    <select
+                      value={col.collation}
+                      onChange={(e) => onUpdate(col._id, { collation: e.target.value })}
+                      disabled={col._isDeleted}
+                      className={clsx(cell, 'font-mono text-text-muted text-2xs cursor-pointer')}
+                    >
+                      <option value="">—</option>
+                      {COMMON_COLLATIONS.map((c) => (
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                      {col.collation && !COMMON_COLLATIONS.includes(col.collation) && (
+                        <option value={col.collation}>{col.collation}</option>
+                      )}
+                    </select>
+                  </td>
+                )}
                 <td className="px-1 py-0.5 text-center">
                   <button
                     onClick={() => onDelete(col._id)}

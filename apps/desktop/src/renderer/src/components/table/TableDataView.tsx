@@ -4,7 +4,7 @@ import { RefreshCw, Plus, Save, Copy, Search, ChevronLeft, ChevronRight, X, Filt
 import { TableDesigner } from '@renderer/components/designer/TableDesigner'
 import { clsx } from 'clsx'
 import type { SchemaColumn } from '@shared/types/query'
-import { formatCellValue, formatDateTimeLocal } from '@shared/utils'
+import { formatCellValue, sqlLiteral } from '@shared/utils'
 import type { DBType } from '@shared/types/connection'
 import type { QueryTab, TableSortDirection, TableViewState, TableSortRule, TableColumnFilterRule } from '@renderer/stores/queryStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
@@ -575,16 +575,16 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
     patchTab(tab.id, { isLoading: true, error: null })
 
     try {
+      const statements: string[] = []
+
       for (const draft of view.pendingInserts) {
         const filledColumns = view.columns.filter((column) => (draft.values[column.name] ?? '') !== '')
         if (filledColumns.length === 0) continue
-        const sql = `INSERT INTO ${quoteIdentifier(dbType, tab.tableName)} (${filledColumns
+        statements.push(`INSERT INTO ${quoteIdentifier(dbType, tab.tableName)} (${filledColumns
           .map((column) => quoteIdentifier(dbType, column.name))
           .join(', ')}) VALUES (${filledColumns
-          .map((column) => sqlValue(draft.values[column.name]))
-          .join(', ')})`
-        const result = await window.db.executeQuery(tab.connectionId, sql, tab.selectedDatabase ?? undefined)
-        if (result.error) throw new Error(result.error)
+          .map((column) => sqlValue(draft.values[column.name], dbType, column.type))
+          .join(', ')})`)
       }
 
       for (const [rowKey, pendingEdit] of Object.entries(view.pendingEdits)) {
@@ -594,18 +594,25 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         })
         if (changedColumns.length === 0) continue
         const setClause = changedColumns
-          .map((column) => `${quoteIdentifier(dbType, column.name)} = ${sqlValue(pendingEdit.values[column.name])}`)
+          .map((column) => `${quoteIdentifier(dbType, column.name)} = ${sqlValue(pendingEdit.values[column.name], dbType, column.type)}`)
           .join(', ')
         const whereClause = buildWhereClause(pkColumns, pendingEdit.originalRow, dbType)
-        const sql = `UPDATE ${quoteIdentifier(dbType, tab.tableName)} SET ${setClause} WHERE ${whereClause}`
-        const result = await window.db.executeQuery(tab.connectionId, sql, tab.selectedDatabase ?? undefined)
-        if (result.error) throw new Error(`${rowKey}: ${result.error}`)
+        statements.push(`UPDATE ${quoteIdentifier(dbType, tab.tableName)} SET ${setClause} WHERE ${whereClause}`)
       }
 
       for (const row of Object.values(view.pendingDeletes)) {
-        const sql = `DELETE FROM ${quoteIdentifier(dbType, tab.tableName)} WHERE ${buildWhereClause(pkColumns, row, dbType)}`
-        const result = await window.db.executeQuery(tab.connectionId, sql, tab.selectedDatabase ?? undefined)
-        if (result.error) throw new Error(result.error)
+        statements.push(`DELETE FROM ${quoteIdentifier(dbType, tab.tableName)} WHERE ${buildWhereClause(pkColumns, row, dbType)}`)
+      }
+
+      if (statements.length > 0) {
+        // All changes run inside ONE transaction: a mid-batch failure rolls
+        // back everything instead of leaving partial edits committed.
+        const result = await window.db.executeTransaction(
+          tab.connectionId,
+          statements,
+          tab.selectedDatabase ?? undefined
+        )
+        if (!result.success) throw new Error(result.message ?? '事务执行失败')
       }
 
       updateTableView(tab.id, (current) => ({
@@ -779,8 +786,9 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         return
       }
 
-      // Delete: Mark selected rows for delete
+      // Delete: Mark selected rows for delete (needs a primary key)
       if (event.key === 'Delete') {
+        if (!hasPrimaryKey) return
         if (selectedDisplayRows.length > 0) {
           event.preventDefault()
           markRowsForDelete(selectedDisplayRows)
@@ -815,7 +823,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
     }
-  }, [selectedDisplayRows, activeRowKey, rowIndexByKey, displayRows, tab.hasPendingChanges, tab.isLoading])
+  }, [selectedDisplayRows, activeRowKey, rowIndexByKey, displayRows, tab.hasPendingChanges, tab.isLoading, hasPrimaryKey])
 
   return (
     <div className="flex flex-col h-full bg-app-bg">
@@ -826,6 +834,12 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
             <div className="text-xs text-text-muted truncate">
               {tab.selectedDatabase || connection?.database || 'default'} · 共 {tableView.totalRows} 行 · 每页 {tableView.pageSize} 条
             </div>
+            {!hasPrimaryKey && (
+              <div className="mt-0.5 inline-flex items-center gap-1 text-2xs text-accent-yellow bg-yellow-900/30 rounded px-1.5 py-0.5">
+                <Info size={10} />
+                该表无主键：仅支持新增行，已有行不可编辑/删除
+              </div>
+            )}
           </div>
           <button
             onClick={() => void copyTableName()}
@@ -1269,6 +1283,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
           x={rowMenu.x}
           y={rowMenu.y}
           selectedRows={rowMenu.selectedRows}
+          hasPrimaryKey={hasPrimaryKey}
           canCopyUpdate={hasPrimaryKey && rowMenu.selectedRows.some((row) => !row.isNew)}
           onClose={() => setRowMenu(null)}
           onMarkDelete={() => {
@@ -1325,6 +1340,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
           connectionId={tab.connectionId}
           table={tab.tableName}
           database={tab.selectedDatabase ?? connection?.database ?? ''}
+          dbType={dbType}
           onClose={() => setShowDesigner(false)}
         />
       )}
@@ -1336,6 +1352,7 @@ function RowContextMenu({
   x,
   y,
   selectedRows,
+  hasPrimaryKey,
   canCopyUpdate,
   onClose,
   onMarkDelete,
@@ -1348,6 +1365,7 @@ function RowContextMenu({
   x: number
   y: number
   selectedRows: DisplayRow[]
+  hasPrimaryKey: boolean
   canCopyUpdate: boolean
   onClose: () => void
   onMarkDelete: () => void
@@ -1398,7 +1416,7 @@ function RowContextMenu({
         {(selectedActiveRows.length > 0 || selectedPendingDeleteRows.length > 0 || selectedNewRows.length > 0) && (
           <div className="border-t border-app-border my-1" />
         )}
-        {selectedActiveRows.length > 0 && (
+        {hasPrimaryKey && selectedActiveRows.length > 0 && (
           <button
             onClick={onMarkDelete}
             className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
@@ -1521,23 +1539,17 @@ function normalizeJsonSqlText(value: unknown): string {
   return JSON.stringify(value)
 }
 
-function sqlValue(value: unknown, columnType?: string): string {
+function sqlValue(value: unknown, engine: DBType, columnType?: string): string {
   if (value === null || value === undefined || value === '') return 'NULL'
-  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
-  if (typeof value === 'boolean') return value ? '1' : '0'
-  if (value instanceof Date) {
-    const formatted = formatDateTimeLocal(value)
-    return formatted ? `'${formatted.replace(/'/g, "''")}'` : 'NULL'
-  }
-  if (isJsonColumnType(columnType)) {
-    return `'${normalizeJsonSqlText(value).replace(/'/g, "''")}'`
-  }
-  return `'${String(value).replace(/'/g, "''")}'`
+  // JSON values are normalized first (compact + validated), then quoted with
+  // engine-aware escaping by sqlLiteral.
+  const raw = isJsonColumnType(columnType) ? normalizeJsonSqlText(value) : value
+  return sqlLiteral(raw, engine)
 }
 
 function buildWhereClause(columns: SchemaColumn[], row: Record<string, unknown>, type: DBType): string {
   return columns
-    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name], column.type)}`)
+    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name], type, column.type)}`)
     .join(' AND ')
 }
 
@@ -1549,7 +1561,7 @@ function buildInsertSql(
 ): string {
   const usedColumns = columns.filter((column) => row[column.name] !== undefined)
   const cols = usedColumns.map((column) => quoteIdentifier(type, column.name)).join(', ')
-  const values = usedColumns.map((column) => sqlValue(row[column.name], column.type)).join(', ')
+  const values = usedColumns.map((column) => sqlValue(row[column.name], type, column.type)).join(', ')
   return `INSERT INTO ${quoteIdentifier(type, tableName)} (${cols}) VALUES (${values});`
 }
 
@@ -1562,7 +1574,7 @@ function buildUpdateSql(
 ): string {
   const setClause = columns
     .filter((column) => !column.primaryKey)
-    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name], column.type)}`)
+    .map((column) => `${quoteIdentifier(type, column.name)} = ${sqlValue(row[column.name], type, column.type)}`)
     .join(', ')
   return `UPDATE ${quoteIdentifier(type, tableName)} SET ${setClause} WHERE ${buildWhereClause(pkColumns, row, type)};`
 }

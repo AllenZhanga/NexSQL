@@ -61,6 +61,7 @@ function ContextMenu({
   const { connections } = useConnectionStore()
   const { openTableTab, newTab, updateTabSQL, updateTabConnection, updateTabDatabase, setActiveTab } = useQueryStore()
   const [confirm, setConfirm] = useState<'truncate' | 'drop' | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
 
   const conn = connections.find((c) => c.id === menu.connectionId)
   const dbType = conn?.type ?? 'mysql'
@@ -110,30 +111,44 @@ function ContextMenu({
 
   const handleTruncateConfirm = async (): Promise<void> => {
     if (!window.db) return
+    setActionError(null)
     try {
-      await window.db.executeQuery(
+      const result = await window.db.executeQuery(
         menu.connectionId,
         `TRUNCATE TABLE ${qt(menu.table.name)};`,
         menu.database
       )
-    } catch {
-      // ignore
+      if (result.error) {
+        setActionError(result.error)
+        return
+      }
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+      return
     }
+    setConfirm(null)
     onClose()
   }
 
   const handleDropConfirm = async (): Promise<void> => {
     if (!window.db) return
+    setActionError(null)
     try {
-      await window.db.executeQuery(
+      const result = await window.db.executeQuery(
         menu.connectionId,
         `DROP TABLE ${qt(menu.table.name)};`,
         menu.database
       )
+      if (result.error) {
+        setActionError(result.error)
+        return
+      }
       onRefreshSchema()
-    } catch {
-      // ignore
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+      return
     }
+    setConfirm(null)
     onClose()
   }
 
@@ -168,7 +183,10 @@ function ContextMenu({
                 ? `确认清空表 "${menu.table.name}"？此操作不可撤销。`
                 : `确认删除表 "${menu.table.name}"？此操作不可撤销。`}
             </p>
-            <div className="flex gap-2">
+            {actionError && (
+              <p className="text-2xs text-accent-red mt-2 break-all">操作失败：{actionError}</p>
+            )}
+            <div className="flex gap-2 mt-2">
               <button
                 onClick={confirm === 'truncate' ? handleTruncateConfirm : handleDropConfirm}
                 className="flex-1 px-2 py-1 rounded bg-accent-red text-white text-xs hover:opacity-90 transition-opacity"
@@ -624,6 +642,8 @@ function DatabaseNode({
   onAlterCharset: (connectionId: string, database: string) => void
 }): JSX.Element {
   const { loadSchema } = useQueryStore()
+  const { connections } = useConnectionStore()
+  const dbType = connections.find((c) => c.id === connectionId)?.type ?? 'mysql'
   const hasFilter = filter.trim().length > 0
   const visibleTables = hasFilter
     ? db.tables.filter((t) => t.name.toLowerCase().includes(filter.toLowerCase()))
@@ -703,6 +723,7 @@ function DatabaseNode({
           connectionId={connectionId}
           table={designer.name}
           database={db.name}
+          dbType={dbType}
           onClose={() => setDesigner(null)}
         />
       )}

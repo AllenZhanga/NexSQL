@@ -82,6 +82,16 @@ export class SQLiteDriver implements IDbDriver {
     }))
   }
 
+  async transaction(sqls: string[]): Promise<void> {
+    // better-sqlite3 wraps the callback in BEGIN/COMMIT and rolls back on throw.
+    const run = this.db.transaction(() => {
+      for (const statement of sqls) {
+        this.db.exec(statement)
+      }
+    })
+    run()
+  }
+
   async useDatabase(_database: string): Promise<void> {
     // SQLite has no database switching
   }

@@ -33,6 +33,7 @@ declare global {
       connect(id: string): Promise<void>
       disconnect(id: string): Promise<void>
       executeQuery(connectionId: string, sql: string, database?: string): Promise<QueryResult>
+      executeTransaction(connectionId: string, sqls: string[], database?: string): Promise<{ success: boolean; message?: string }>
       getDatabases(connectionId: string): Promise<string[]>
       createDatabase(connectionId: string, database: string, charset?: string, collation?: string): Promise<void>
       dropDatabase(connectionId: string, database: string): Promise<void>

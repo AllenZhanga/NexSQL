@@ -13,8 +13,10 @@ interface MSSQLConfig {
 export class MSSQLDriver implements IDbDriver {
   private pool: sql.ConnectionPool | null = null
   private config: sql.config
+  private currentDatabase: string
 
   constructor(config: MSSQLConfig) {
+    this.currentDatabase = config.database
     this.config = {
       server: config.host,
       port: config.port,
@@ -48,7 +50,14 @@ export class MSSQLDriver implements IDbDriver {
 
   async execute(sqlStr: string): Promise<DriverResult> {
     const pool = await this.getPool()
-    const result = await pool.request().query(sqlStr)
+    // USE and the query must run on the SAME connection. mssql's pool.request()
+    // acquires a pooled connection per query, so issuing USE separately would
+    // race with other queries. Prepending USE to the batch keeps it on one
+    // connection for the whole request.
+    const scopedSql = this.currentDatabase
+      ? `USE [${this.currentDatabase.replace(/]/g, ']]')}];\n${sqlStr}`
+      : sqlStr
+    const result = await pool.request().query(scopedSql)
     const recordset = result.recordset ?? []
     const columnsMeta = (recordset as unknown as { columns?: Record<string, { name: string; type: { name?: string } }> }).columns ?? {}
     const columns = Object.values(columnsMeta).map((c) => ({
@@ -61,6 +70,29 @@ export class MSSQLDriver implements IDbDriver {
       rows: recordset as Record<string, unknown>[],
       rowCount: recordset.length > 0 ? recordset.length : rowsAffected,
       affectedRows: rowsAffected
+    }
+  }
+
+  async transaction(sqls: string[]): Promise<void> {
+    const pool = await this.getPool()
+    const tx = new sql.Transaction(pool)
+    await tx.begin()
+    try {
+      const request = new sql.Request(tx)
+      if (this.currentDatabase) {
+        await request.query(`USE [${this.currentDatabase.replace(/]/g, ']]')}]`)
+      }
+      for (const statement of sqls) {
+        await new sql.Request(tx).query(statement)
+      }
+      await tx.commit()
+    } catch (err) {
+      try {
+        await tx.rollback()
+      } catch {
+        // ignore rollback failures while handling the original error
+      }
+      throw err
     }
   }
 
@@ -119,8 +151,9 @@ export class MSSQLDriver implements IDbDriver {
   }
 
   async useDatabase(database: string): Promise<void> {
-    const pool = await this.getPool()
-    await pool.request().query(`USE [${database}]`)
+    // Only track the target database here; the actual USE is prepended inside
+    // execute()/transaction() so it runs on the same connection as the query.
+    this.currentDatabase = database
   }
 
   async getIndexes(table: string, database?: string): Promise<DriverIndexInfo[]> {

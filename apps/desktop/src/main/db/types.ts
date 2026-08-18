@@ -37,6 +37,8 @@ export interface DriverIndexInfo {
 export interface IDbDriver {
   testConnection(): Promise<void>
   execute(sql: string): Promise<DriverResult>
+  /** Execute a batch of statements atomically (BEGIN/COMMIT/ROLLBACK). */
+  transaction(sqls: string[]): Promise<void>
   getDatabases(): Promise<string[]>
   getTables(database?: string): Promise<DriverTableInfo[]>
   getColumns(table: string, database?: string): Promise<DriverColumnInfo[]>

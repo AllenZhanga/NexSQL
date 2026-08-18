@@ -96,9 +96,8 @@ function ConnContextMenu({
 export function ConnectionList(): JSX.Element {
   const t = useT()
   const { connections, statuses, activeConnectionId, connect, disconnect, deleteConnection, duplicateConnection, loadConnections } = useConnectionStore()
-  const { loadSchema, updateTabConnection, openRedisConsoleTab, openRedisBrowserTab } = useQueryStore()
+  const { loadSchema, openRedisConsoleTab, openRedisBrowserTab } = useQueryStore()
   const { openConnectionDialog } = useUIStore()
-  const { activeTabId } = useQueryStore()
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -153,8 +152,8 @@ export function ConnectionList(): JSX.Element {
       return
     }
 
+    // 不自动绑定当前查询标签页的连接：避免双击连接时静默改写正在编辑的标签页
     await loadSchema(conn.id)
-    if (activeTabId) updateTabConnection(activeTabId, conn.id)
   }
 
   const handleContextMenu = (e: React.MouseEvent, conn: ConnectionConfig): void => {

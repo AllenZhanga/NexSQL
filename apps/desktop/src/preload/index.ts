@@ -53,6 +53,9 @@ const dbAPI = {
   executeQuery: (connectionId: string, sql: string, database?: string): Promise<QueryResult> =>
     ipcRenderer.invoke('db:executeQuery', connectionId, sql, database),
 
+  executeTransaction: (connectionId: string, sqls: string[], database?: string): Promise<{ success: boolean; message?: string }> =>
+    ipcRenderer.invoke('db:executeTransaction', connectionId, sqls, database),
+
   getDatabases: (connectionId: string): Promise<string[]> =>
     ipcRenderer.invoke('db:getDatabases', connectionId),
 

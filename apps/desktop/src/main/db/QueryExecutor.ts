@@ -3,7 +3,7 @@ import Database from 'better-sqlite3'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
 import type { QueryResult, QueryHistoryEntry, DatabaseSchema, DatabaseInfo, SchemaTable, SchemaColumn } from '@shared/types/query'
-import { formatDateTimeLocal } from '@shared/utils'
+import { sqlLiteral } from '@shared/utils'
 import { getDriver, getConnectionConfig, reconnectById } from './ConnectionManager'
 import { driverResultToQueryResult } from './types'
 
@@ -89,6 +89,35 @@ export async function executeQuery(
   }
 
   return result
+}
+
+/**
+ * Executes a batch of statements atomically. Each driver runs the statements
+ * inside a real transaction (BEGIN/COMMIT, ROLLBACK on failure).
+ */
+export async function executeTransaction(
+  connectionId: string,
+  sqls: string[],
+  database?: string
+): Promise<{ success: boolean; message?: string }> {
+  const statements = sqls.map((s) => s.trim()).filter(Boolean)
+  if (statements.length === 0) return { success: true }
+
+  return runWithReconnect(connectionId, async () => {
+    const driver = getDriver(connectionId)
+    if (database) {
+      await driver.useDatabase(database)
+    }
+    try {
+      await driver.transaction(statements)
+      return { success: true }
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : String(err)
+      }
+    }
+  })
 }
 
 export async function getDatabases(connectionId: string): Promise<string[]> {
@@ -225,25 +254,13 @@ export async function exportTableSQL(
     const targetDb = database ?? config.database ?? ''
 
     const ddl = await driver.getTableDDL(table, targetDb)
-    const dataResult = await driver.execute(`SELECT * FROM \`${table}\``)
+    const dataResult = await driver.execute(buildSelectAllSQL(config.type, table))
     const rows = dataResult.rows
 
     if (rows.length === 0) return ddl + '\n-- No data'
 
-    const cols = dataResult.columns.map((c) => `\`${c.name}\``).join(', ')
-    const inserts = rows.map((row) => {
-      const vals = dataResult.columns.map((c) => {
-        const v = row[c.name]
-        if (v === null || v === undefined) return 'NULL'
-        if (typeof v === 'number') return String(v)
-        if (v instanceof Date) {
-          const formatted = formatDateTimeLocal(v)
-          return formatted ? `'${formatted.replace(/'/g, "''")}'` : 'NULL'
-        }
-        return `'${String(v).replace(/'/g, "''")}'`
-      }).join(', ')
-      return `INSERT INTO \`${table}\` (${cols}) VALUES (${vals});`
-    })
+    const columnNames = dataResult.columns.map((c) => c.name)
+    const inserts = rows.map((row) => buildInsertSQL(config.type, table, columnNames, row))
 
     return ddl + '\n\n' + inserts.join('\n')
   })
@@ -255,15 +272,8 @@ function quoteIdentifierByType(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite'
   return escapeMySQLIdentifier(name)
 }
 
-function toSqlLiteral(value: unknown): string {
-  if (value === null || value === undefined) return 'NULL'
-  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
-  if (typeof value === 'boolean') return value ? '1' : '0'
-  if (value instanceof Date) {
-    const formatted = formatDateTimeLocal(value)
-    return formatted ? `'${formatted.replace(/'/g, "''")}'` : 'NULL'
-  }
-  return `'${String(value).replace(/'/g, "''")}'`
+function toSqlLiteral(value: unknown, engine: string): string {
+  return sqlLiteral(value, engine)
 }
 
 function buildSelectAllSQL(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis', table: string): string {
@@ -279,7 +289,7 @@ function buildInsertSQL(
 ): string {
   const tableIdent = quoteIdentifierByType(type, table)
   const cols = columns.map((col) => quoteIdentifierByType(type, col)).join(', ')
-  const values = columns.map((col) => toSqlLiteral(row[col])).join(', ')
+  const values = columns.map((col) => toSqlLiteral(row[col], type)).join(', ')
   return `INSERT INTO ${tableIdent} (${cols}) VALUES (${values});`
 }
 

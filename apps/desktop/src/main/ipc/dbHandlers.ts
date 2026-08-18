@@ -14,6 +14,7 @@ import {
 } from '../db/ConnectionManager'
 import { 
   executeQuery, 
+  executeTransaction, 
   getDatabases, 
   getSchema, 
   getHistory, 
@@ -72,6 +73,13 @@ export function registerDbHandlers(): void {
     'db:executeQuery',
     async (_event, connectionId: string, sql: string, database?: string) => {
       return executeQuery(connectionId, sql, database)
+    }
+  )
+
+  ipcMain.handle(
+    'db:executeTransaction',
+    async (_event, connectionId: string, sqls: string[], database?: string) => {
+      return executeTransaction(connectionId, sqls, database)
     }
   )
 

@@ -6,6 +6,7 @@ import type { SchemaTable } from '@shared/types/query'
 import type { QueryTab } from '@renderer/stores/queryStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
+import { sqlLiteral } from '@shared/utils'
 
 interface DatabaseOverviewProps {
   tab: QueryTab
@@ -808,17 +809,10 @@ function quoteIdentifier(type: DBType, value: string): string {
   return `\`${value.replace(/`/g, '``')}\``
 }
 
-function toSqlLiteral(value: unknown): string {
-  if (value === null || value === undefined) return 'NULL'
-  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
-  if (typeof value === 'boolean') return value ? '1' : '0'
-  return `'${String(value).replace(/'/g, "''")}'`
-}
-
 function buildInsertStatement(type: DBType, tableName: string, columns: string[], row: Record<string, unknown>): string {
   const table = quoteIdentifier(type, tableName)
   const cols = columns.map((column) => quoteIdentifier(type, column)).join(', ')
-  const values = columns.map((column) => toSqlLiteral(row[column])).join(', ')
+  const values = columns.map((column) => sqlLiteral(row[column], type)).join(', ')
   return `INSERT INTO ${table} (${cols}) VALUES (${values});`
 }
 

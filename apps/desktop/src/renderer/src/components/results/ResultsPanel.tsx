@@ -7,7 +7,8 @@ import {
 } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef } from 'react'
-import { Download, AlertCircle, CheckCircle2, Clock } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Download, AlertCircle, CheckCircle2, Clock, Copy } from 'lucide-react'
 import type { QueryResult } from '@shared/types/query'
 import { formatCellValue } from '@shared/utils'
 import { clsx } from 'clsx'
@@ -177,8 +178,16 @@ export function ResultsPanel({ result, isLoading }: ResultsPanelProps): JSX.Elem
   )
 }
 
+interface CellMenuState {
+  x: number
+  y: number
+  row: Record<string, unknown>
+  cellValue: string | null
+}
+
 function DataTable({ result }: { result: QueryResult }): JSX.Element {
   const parentRef = useRef<HTMLDivElement>(null)
+  const [cellMenu, setCellMenu] = useState<CellMenuState | null>(null)
 
   const columns = useMemo<ColumnDef<Record<string, unknown>>[]>(
     () =>
@@ -260,14 +269,27 @@ function DataTable({ result }: { result: QueryResult }): JSX.Element {
                 <td className="px-2 py-1 text-right text-text-muted border-r border-app-border font-mono text-2xs">
                   {virtualRow.index + 1}
                 </td>
-                {row.getVisibleCells().map((cell) => (
-                  <td
-                    key={cell.id}
-                    className="px-2 py-1 border-r border-app-border max-w-[300px] overflow-hidden text-ellipsis whitespace-nowrap"
-                  >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </td>
-                ))}
+                {row.getVisibleCells().map((cell) => {
+                  const raw = cell.getValue()
+                  return (
+                    <td
+                      key={cell.id}
+                      onContextMenu={(e) => {
+                        e.preventDefault()
+                        setCellMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          row: row.original,
+                          cellValue: raw === null || raw === undefined ? null : String(raw)
+                        })
+                      }}
+                      title="右键复制单元格/整行"
+                      className="px-2 py-1 border-r border-app-border max-w-[300px] overflow-hidden text-ellipsis whitespace-nowrap"
+                    >
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  )
+                })}
               </tr>
             )
           })}
@@ -276,8 +298,67 @@ function DataTable({ result }: { result: QueryResult }): JSX.Element {
           )}
         </tbody>
       </table>
+
+      {cellMenu && createPortal(
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setCellMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault()
+              setCellMenu(null)
+            }}
+          />
+          <div
+            className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[170px] text-xs"
+            style={{ top: cellMenu.y, left: cellMenu.x }}
+          >
+            <button
+              onClick={() => {
+                void copyText(cellMenu.cellValue ?? '')
+                setCellMenu(null)
+              }}
+              className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+            >
+              <Copy size={12} />
+              复制单元格
+            </button>
+            <button
+              onClick={() => {
+                void copyText(rowToTsv(result.columns, cellMenu.row))
+                setCellMenu(null)
+              }}
+              className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+            >
+              <Copy size={12} />
+              复制整行 (TSV)
+            </button>
+            <button
+              onClick={() => {
+                void copyText(JSON.stringify(cellMenu.row, null, 2))
+                setCellMenu(null)
+              }}
+              className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+            >
+              <Copy size={12} />
+              复制整行 (JSON)
+            </button>
+          </div>
+        </>,
+        document.body
+      )}
     </div>
   )
+}
+
+function rowToTsv(columns: { name: string }[], row: Record<string, unknown>): string {
+  return columns
+    .map((c) => {
+      const v = row[c.name]
+      if (v === null || v === undefined) return ''
+      return String(v).replace(/\t/g, ' ').replace(/\n/g, ' ')
+    })
+    .join('\t')
 }
 
 function estimateColumnWidth(name: string, rows: Record<string, unknown>[]): number {
