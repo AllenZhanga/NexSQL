@@ -1,4 +1,4 @@
-﻿import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
+import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
 import MonacoEditor, { type OnMount } from '@monaco-editor/react'
 import { KeyMod, KeyCode, languages, type editor, type IDisposable } from 'monaco-editor'
 import { Play, Loader2, ChevronDown, Download, AlignLeft, Minimize2, Sparkles, BrainCircuit } from 'lucide-react'
@@ -8,7 +8,6 @@ import { useQueryStore } from '@renderer/stores/queryStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { usePrefsStore } from '@renderer/stores/prefsStore'
 import { useAIStore } from '@renderer/stores/aiStore'
-import { useUIStore } from '@renderer/stores/uiStore'
 
 type TableColumnEntry = {
   table: string
@@ -20,8 +19,7 @@ export function QueryEditor(): JSX.Element {
   const { tabs, activeTabId, updateTabSQL, updateTabConnection, updateTabDatabase, loadSchema } = useQueryStore()
   const { connections, statuses } = useConnectionStore()
   const { fontSize, theme } = usePrefsStore()
-  const { optimizeSQL, isOptimizing, semanticIndexStatus, loadSemanticIndexStatus } = useAIStore()
-  const { setWindowTab } = useUIStore()
+  const { optimizeSQL, isOptimizing } = useAIStore()
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const completionDisposableRef = useRef<IDisposable | null>(null)
   const completionSuggestionsRef = useRef<Array<Omit<languages.CompletionItem, 'range'>>>([])
@@ -53,17 +51,6 @@ export function QueryEditor(): JSX.Element {
   const currentStatement = useMemo(() => getCurrentSqlStatement(activeTab?.sql ?? ''), [activeTab?.sql])
   const referencedTables = useMemo(() => extractReferencedTables(currentStatement), [currentStatement])
   const aliasEntries = useMemo(() => Object.entries(parseTableAliases(currentStatement)), [currentStatement])
-  const semanticItems = activeTab?.connectionId ? semanticIndexStatus[activeTab.connectionId] ?? [] : []
-  const semanticMatches = useMemo(() => {
-    const tableSet = new Set(referencedTables.map((table) => table.toLowerCase()))
-    return semanticItems.filter((item) => tableSet.has(item.tableName.toLowerCase()))
-  }, [referencedTables, semanticItems])
-
-  useEffect(() => {
-    if (activeTab?.connectionId) {
-      void loadSemanticIndexStatus(activeTab.connectionId)
-    }
-  }, [activeTab?.connectionId, loadSemanticIndexStatus])
 
   const handleRun = useCallback((): void => {
     const tabId = activeTabIdRef.current
@@ -584,35 +571,6 @@ export function QueryEditor(): JSX.Element {
             {alias} {'->'} {table}
           </span>
         ))}
-        <span className="text-2xs text-text-muted">
-          语义索引命中 {semanticMatches.length}/{referencedTables.length || 0}
-        </span>
-        {referencedTables.length > 0 && semanticMatches.length < referencedTables.length && (
-          <button
-            onClick={() => setWindowTab('ai-workbench')}
-            className="rounded border border-app-border px-2 py-0.5 text-2xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
-            title="前往 AI 工作台查看或重建语义索引"
-          >
-            去补索引
-          </button>
-        )}
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-app-border bg-app-bg shrink-0">
-        {semanticMatches.length > 0 ? (
-          semanticMatches.slice(0, 4).map((item) => (
-            <button
-              key={`${item.databaseName}.${item.tableName}`}
-              onClick={() => setWindowTab('ai-workbench')}
-              className="rounded border border-accent-blue/40 bg-blue-500/10 px-2 py-0.5 text-2xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
-              title={item.manualNotes ? `人工备注: ${item.manualNotes}` : '前往 AI 工作台查看索引详情'}
-            >
-              命中 {item.databaseName}.{item.tableName}{item.manualNotes ? ' · 含备注' : ''}
-            </button>
-          ))
-        ) : (
-          <span className="text-2xs text-text-muted">未命中语义索引时，AI 将主要依赖 SQL 结构、执行计划和 schema。</span>
-        )}
       </div>
 
       {/* Monaco Editor */}

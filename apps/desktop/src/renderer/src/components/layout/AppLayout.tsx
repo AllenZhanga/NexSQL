@@ -16,7 +16,6 @@ import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
 import { useUIStore } from '@renderer/stores/uiStore'
 import { usePrefsStore, applyFontSize, applyTheme } from '@renderer/stores/prefsStore'
-import { AIWorkbench } from '../ai/AIWorkbench'
 import { DevWorkbench } from '../ai/DevWorkbench'
 import { clsx } from 'clsx'
 
@@ -96,17 +95,6 @@ export function AppLayout(): JSX.Element {
                 工作区
               </button>
               <button
-                onClick={() => setWindowTab('ai-workbench')}
-                className={clsx(
-                  'rounded px-2 py-1 text-xs transition-colors',
-                  windowTab === 'ai-workbench'
-                    ? 'bg-app-active text-white'
-                    : 'text-text-secondary hover:bg-app-hover hover:text-text-primary'
-                )}
-              >
-                AI 工作台
-              </button>
-              <button
                 onClick={() => setWindowTab('dev-workbench')}
                 className={clsx(
                   'rounded px-2 py-1 text-xs transition-colors',
@@ -119,11 +107,7 @@ export function AppLayout(): JSX.Element {
               </button>
             </div>
 
-            {windowTab === 'ai-workbench' ? (
-              <div className="flex-1 overflow-hidden">
-                <AIWorkbench />
-              </div>
-            ) : windowTab === 'dev-workbench' ? (
+            {windowTab === 'dev-workbench' ? (
               <div className="flex-1 overflow-hidden p-3">
                 <DevWorkbench />
               </div>
