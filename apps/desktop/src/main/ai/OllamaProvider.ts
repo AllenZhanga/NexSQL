@@ -1,20 +1,5 @@
-import type {
-  AIConfig,
-  NLToSQLRequest,
-  SQLOptimizeRequest,
-  AIDesignRequest,
-  AIDocRequest,
-  ERGraphInferRequest
-} from '@shared/types/ai'
-import {
-  buildSystemPrompt,
-  buildOptimizePrompt,
-  buildDesignPrompt,
-  buildSchemaDocPrompt,
-  buildRelationInferPrompt,
-  getDefaultModel,
-  type AIProvider
-} from './AIProvider'
+import type { AIConfig, NLToSQLRequest } from '@shared/types/ai'
+import { buildSystemPrompt, getDefaultModel, type AIProvider } from './AIProvider'
 
 interface OllamaResponse {
   model: string
@@ -41,53 +26,12 @@ export class OllamaProvider implements AIProvider {
     return this.streamGenerate(prompt, onToken)
   }
 
-  async optimizeSQL(
-    schema: string,
-    request: SQLOptimizeRequest,
-    planSummary: string,
-    onToken: (token: string) => void
-  ): Promise<string> {
-    const systemPrompt = buildOptimizePrompt(schema, 'sql', planSummary)
-    const prompt = `${systemPrompt}\n\nUser request: 请诊断并优化以下 SQL\n${request.sql}`
-    return this.streamGenerate(prompt, onToken)
-  }
-
-  async generateDesignSQL(
-    schema: string,
-    request: AIDesignRequest,
-    onToken: (token: string) => void
-  ): Promise<string> {
-    const systemPrompt = buildDesignPrompt(schema, request.dialect)
-    const prompt = `${systemPrompt}\n\nUser request: ${request.prompt}`
-    return this.streamGenerate(prompt, onToken)
-  }
-
-  async generateSchemaDoc(
-    schema: string,
-    request: AIDocRequest,
-    onToken: (token: string) => void
-  ): Promise<string> {
-    const systemPrompt = buildSchemaDocPrompt(schema, request.dialect)
-    const targetText = request.targets.map((item) => `${item.database}.${item.table}`).join(', ')
-    const prompt = `${systemPrompt}\n\nUser request: 为这些表生成 Markdown 数据字典：${targetText}`
-    return this.streamGenerate(prompt, onToken)
-  }
-
-  async inferSchemaRelations(
-    schema: string,
-    request: ERGraphInferRequest,
-    onToken: (token: string) => void
-  ): Promise<string> {
-    const systemPrompt = buildRelationInferPrompt(schema)
-    const prompt = `${systemPrompt}\n\nUser request: 为数据库 ${request.databaseName} 推断最多 ${request.maxCandidates ?? 60} 条关系。`
-    return this.streamGenerate(prompt, onToken)
-  }
-
   private async streamGenerate(prompt: string, onToken: (token: string) => void): Promise<string> {
     const model = getDefaultModel(this.config)
 
     const response = await fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',
+      signal: AbortSignal.timeout(120000),
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
@@ -112,24 +56,30 @@ export class OllamaProvider implements AIProvider {
     const decoder = new TextDecoder()
     let fullSQL = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      const lines = decoder.decode(value, { stream: true }).split('\n')
-      for (const line of lines) {
-        if (!line.trim()) continue
-        try {
-          const data = JSON.parse(line) as OllamaResponse
-          if (data.response) {
-            fullSQL += data.response
-            onToken(data.response)
-          }
-          if (data.done) break
-        } catch {
-          // skip malformed JSON lines
+    let pending = ''
+    const consume = (line: string): void => {
+      if (!line.trim()) return
+      const data = JSON.parse(line) as OllamaResponse & { error?: string }
+      if (data.error) throw new Error(data.error)
+      if (data.response) {
+        fullSQL += data.response
+        onToken(data.response)
+      }
+    }
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        pending += decoder.decode(value, { stream: !done })
+        const lines = pending.split('\n')
+        pending = lines.pop() ?? ''
+        for (const line of lines) consume(line)
+        if (done) {
+          consume(pending)
+          break
         }
       }
+    } finally {
+      reader.releaseLock()
     }
 
     return fullSQL.trim()

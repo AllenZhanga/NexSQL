@@ -2,7 +2,14 @@ import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import type { QueryResult, QueryHistoryEntry, DatabaseSchema, DatabaseInfo, SchemaTable, SchemaColumn } from '@shared/types/query'
+import type {
+  QueryResult,
+  QueryHistoryEntry,
+  DatabaseSchema,
+  DatabaseInfo,
+  SchemaTable,
+  SchemaColumn
+} from '@shared/types/query'
 import { sqlLiteral } from '@shared/utils'
 import { getDriver, getConnectionConfig, reconnectById } from './ConnectionManager'
 import { driverResultToQueryResult } from './types'
@@ -33,10 +40,7 @@ function isConnectionDropped(err: unknown): boolean {
   )
 }
 
-async function runWithReconnect<T>(
-  connectionId: string,
-  action: () => Promise<T>
-): Promise<T> {
+async function runWithReconnect<T>(connectionId: string, action: () => Promise<T>): Promise<T> {
   try {
     return await action()
   } catch (err) {
@@ -67,25 +71,17 @@ export async function executeQuery(
   try {
     result = await runQuery()
     saveHistory(connectionId, sql, Date.now() - start, result.rowCount, true)
-  } catch (firstErr) {
-    // One automatic reconnect attempt on dropped-connection errors
-    if (isConnectionDropped(firstErr)) {
-      try {
-        await reconnectById(connectionId)
-        result = await runQuery()
-        saveHistory(connectionId, sql, Date.now() - start, result.rowCount, true)
-      } catch (retryErr) {
-        const durationMs = Date.now() - start
-        const errorMsg = retryErr instanceof Error ? retryErr.message : String(retryErr)
-        result = { columns: [], rows: [], rowCount: 0, durationMs, sql, error: errorMsg }
-        saveHistory(connectionId, sql, durationMs, 0, false, errorMsg)
-      }
-    } else {
-      const durationMs = Date.now() - start
-      const errorMsg = firstErr instanceof Error ? firstErr.message : String(firstErr)
-      result = { columns: [], rows: [], rowCount: 0, durationMs, sql, error: errorMsg }
-      saveHistory(connectionId, sql, durationMs, 0, false, errorMsg)
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err)
+    result = {
+      columns: [],
+      rows: [],
+      rowCount: 0,
+      durationMs: Date.now() - start,
+      sql,
+      error: errorMsg
     }
+    saveHistory(connectionId, sql, result.durationMs, 0, false, errorMsg)
   }
 
   return result
@@ -124,10 +120,7 @@ export async function getDatabases(connectionId: string): Promise<string[]> {
   return runWithReconnect(connectionId, async () => getDriver(connectionId).getDatabases())
 }
 
-export async function getSchema(
-  connectionId: string,
-  database?: string
-): Promise<DatabaseSchema> {
+export async function getSchema(connectionId: string, database?: string): Promise<DatabaseSchema> {
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
@@ -266,7 +259,10 @@ export async function exportTableSQL(
   })
 }
 
-function quoteIdentifierByType(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis', name: string): string {
+function quoteIdentifierByType(
+  type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis',
+  name: string
+): string {
   if (type === 'mssql') return escapeMSSQLIdentifier(name)
   if (type === 'postgresql' || type === 'sqlite') return escapePostgresIdentifier(name)
   return escapeMySQLIdentifier(name)
@@ -276,7 +272,10 @@ function toSqlLiteral(value: unknown, engine: string): string {
   return sqlLiteral(value, engine)
 }
 
-function buildSelectAllSQL(type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis', table: string): string {
+function buildSelectAllSQL(
+  type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis',
+  table: string
+): string {
   const ident = quoteIdentifierByType(type, table)
   return `SELECT * FROM ${ident}`
 }
@@ -328,7 +327,7 @@ function splitSqlStatements(sql: string): string[] {
         index++
         continue
       }
-      if (char === '#' ) {
+      if (char === '#') {
         inLineComment = true
         continue
       }
@@ -374,10 +373,7 @@ function splitSqlStatements(sql: string): string[] {
   return statements.filter((statement) => !/^DELIMITER\b/i.test(statement.trim()))
 }
 
-export async function exportDatabaseSQL(
-  connectionId: string,
-  database?: string
-): Promise<string> {
+export async function exportDatabaseSQL(connectionId: string, database?: string): Promise<string> {
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
@@ -484,7 +480,9 @@ export async function createDatabase(
     if (config.type === 'mysql') {
       const charsetSql = charset?.trim() ? ` CHARACTER SET ${charset.trim()}` : ''
       const collateSql = collation?.trim() ? ` COLLATE ${collation.trim()}` : ''
-      await driver.execute(`CREATE DATABASE ${escapeMySQLIdentifier(dbName)}${charsetSql}${collateSql}`)
+      await driver.execute(
+        `CREATE DATABASE ${escapeMySQLIdentifier(dbName)}${charsetSql}${collateSql}`
+      )
       return
     }
 
@@ -502,10 +500,7 @@ export async function createDatabase(
   })
 }
 
-export async function dropDatabase(
-  connectionId: string,
-  database: string
-): Promise<void> {
+export async function dropDatabase(connectionId: string, database: string): Promise<void> {
   return runWithReconnect(connectionId, async () => {
     const driver = getDriver(connectionId)
     const config = getConnectionConfig(connectionId)
@@ -583,20 +578,23 @@ export async function alterDatabaseCharset(
   })
 }
 
-function saveHistory(
+export function saveHistory(
   connectionId: string,
   sql: string,
   durationMs: number,
   rowCount: number,
   success: boolean,
-  error?: string
+  error?: string,
+  database?: string
 ): void {
   try {
     const db = getInternalDb()
-    db.prepare(`
-      INSERT INTO query_history (id, connection_id, sql, duration_ms, row_count, success, error, executed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    db.prepare(
+      `
+      INSERT INTO query_history (id, connection_id, sql, duration_ms, row_count, success, error, executed_at, database_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `
+    ).run(
       randomUUID(),
       connectionId,
       sql.trim(),
@@ -604,17 +602,15 @@ function saveHistory(
       rowCount,
       success ? 1 : 0,
       error ?? null,
-      Date.now()
+      Date.now(),
+      database ?? null
     )
   } catch {
     // Non-critical, ignore history save errors
   }
 }
 
-export function getHistory(
-  connectionId?: string,
-  limit = 100
-): QueryHistoryEntry[] {
+export function getHistory(connectionId?: string, limit = 100): QueryHistoryEntry[] {
   const db = getInternalDb()
   const query = connectionId
     ? db.prepare(
@@ -623,11 +619,10 @@ export function getHistory(
       )
     : db.prepare(`SELECT * FROM query_history ORDER BY executed_at DESC LIMIT ?`)
 
-  const rows = (connectionId
-    ? query.all(connectionId, limit)
-    : query.all(limit)) as Array<{
+  const rows = (connectionId ? query.all(connectionId, limit) : query.all(limit)) as Array<{
     id: string
     connection_id: string
+    database_name?: string
     sql: string
     duration_ms: number
     row_count: number
@@ -639,6 +634,7 @@ export function getHistory(
   return rows.map((r) => ({
     id: r.id,
     connectionId: r.connection_id,
+    database: r.database_name,
     sql: r.sql,
     durationMs: r.duration_ms,
     rowCount: r.row_count,

@@ -14,6 +14,7 @@ export interface QueryResult {
 }
 
 export interface QueryHistoryEntry {
+  database?: string
   id: string
   connectionId: string
   sql: string
@@ -50,4 +51,19 @@ export interface DatabaseInfo {
 export interface DatabaseSchema {
   connectionId: string
   databases: DatabaseInfo[]
+}
+
+export interface QueryBatchResult {
+  results: QueryResult[]
+  totalStatements: number
+  durationMs: number
+  warning?: string
+  status: 'completed' | 'failed' | 'cancelled'
+  error?: string
+}
+export interface QueryProgress {
+  executionId: string
+  index: number
+  total: number
+  result: QueryResult
 }

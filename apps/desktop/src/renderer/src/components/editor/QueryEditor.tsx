@@ -1,13 +1,13 @@
-import { useRef, useCallback, useState, useEffect, useMemo } from 'react'
+import { useRef, useCallback, useState, useEffect } from 'react'
 import MonacoEditor, { type OnMount } from '@monaco-editor/react'
 import { KeyMod, KeyCode, languages, type editor, type IDisposable } from 'monaco-editor'
-import { Play, Loader2, ChevronDown, Download, AlignLeft, Minimize2, Sparkles, BrainCircuit } from 'lucide-react'
+import { Play, Loader2, ChevronDown, Download, AlignLeft, Square } from 'lucide-react'
 import { format as formatSQL } from 'sql-formatter'
 import { clsx } from 'clsx'
 import { useQueryStore } from '@renderer/stores/queryStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { usePrefsStore } from '@renderer/stores/prefsStore'
-import { useAIStore } from '@renderer/stores/aiStore'
+import { splitSQL } from '@shared/sqlStatements'
 
 type TableColumnEntry = {
   table: string
@@ -16,10 +16,10 @@ type TableColumnEntry = {
 }
 
 export function QueryEditor(): JSX.Element {
-  const { tabs, activeTabId, updateTabSQL, updateTabConnection, updateTabDatabase, loadSchema } = useQueryStore()
+  const { tabs, activeTabId, updateTabSQL, updateTabConnection, updateTabDatabase, loadSchema } =
+    useQueryStore()
   const { connections, statuses } = useConnectionStore()
   const { fontSize, theme } = usePrefsStore()
-  const { optimizeSQL, isOptimizing } = useAIStore()
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const completionDisposableRef = useRef<IDisposable | null>(null)
   const completionSuggestionsRef = useRef<Array<Omit<languages.CompletionItem, 'range'>>>([])
@@ -31,6 +31,8 @@ export function QueryEditor(): JSX.Element {
   const activeTabIdRef = useRef<string | null>(activeTabId)
   activeTabIdRef.current = activeTabId
 
+  const [editorError, setEditorError] = useState('')
+  const [selectionCount, setSelectionCount] = useState(0)
   const [showConnPicker, setShowConnPicker] = useState(false)
   const [showDbPicker, setShowDbPicker] = useState(false)
   const [availableDbs, setAvailableDbs] = useState<string[]>([])
@@ -48,13 +50,17 @@ export function QueryEditor(): JSX.Element {
   )
 
   const editorFontSize = fontSize === 'small' ? 12 : fontSize === 'large' ? 16 : 14
-  const currentStatement = useMemo(() => getCurrentSqlStatement(activeTab?.sql ?? ''), [activeTab?.sql])
-  const referencedTables = useMemo(() => extractReferencedTables(currentStatement), [currentStatement])
-  const aliasEntries = useMemo(() => Object.entries(parseTableAliases(currentStatement)), [currentStatement])
-
   const handleRun = useCallback((): void => {
     const tabId = activeTabIdRef.current
     if (!tabId) return
+    const tab = useQueryStore.getState().tabs.find((item) => item.id === tabId)
+    if (
+      !tab?.connectionId ||
+      useConnectionStore.getState().statuses[tab.connectionId] !== 'connected'
+    ) {
+      useQueryStore.getState().patchTab(tabId, { error: '请先连接数据库，再执行查询' })
+      return
+    }
 
     const selection = editorRef.current?.getSelection()
     const model = editorRef.current?.getModel()
@@ -67,25 +73,34 @@ export function QueryEditor(): JSX.Element {
   }, [])
 
   const handleFormatSQL = (): void => {
-    if (!activeTabId || !activeTab?.sql.trim()) return
+    const ed = editorRef.current
+    const model = ed?.getModel()
+    if (!ed || !model) return
+    const selection = ed.getSelection()
+    const range = selection && !selection.isEmpty() ? selection : model.getFullModelRange()
     try {
-      const formatted = formatSQL(activeTab.sql, { language: 'sql', tabWidth: 2, keywordCase: 'upper' })
-      updateTabSQL(activeTabId, formatted)
-      editorRef.current?.setValue(formatted)
-    } catch {
-      // 格式化失败时保持原样
+      const language =
+        connection?.type === 'mysql'
+          ? 'mysql'
+          : connection?.type === 'postgresql'
+            ? 'postgresql'
+            : connection?.type === 'mssql'
+              ? 'transactsql'
+              : connection?.type === 'sqlite'
+                ? 'sqlite'
+                : 'sql'
+      const formatted = formatSQL(model.getValueInRange(range), {
+        language,
+        tabWidth: 2,
+        keywordCase: 'upper'
+      })
+      ed.pushUndoStop()
+      ed.executeEdits('format', [{ range, text: formatted }])
+      ed.pushUndoStop()
+      setEditorError('')
+    } catch (err) {
+      setEditorError(`无法格式化：${err instanceof Error ? err.message : String(err)}`)
     }
-  }
-
-  const handleCompressSQL = (): void => {
-    if (!activeTabId || !activeTab?.sql.trim()) return
-    const compressed = activeTab.sql
-      .replace(/--[^\n]*/g, '')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/\s+/g, ' ')
-      .trim()
-    updateTabSQL(activeTabId, compressed)
-    editorRef.current?.setValue(compressed)
   }
 
   const handleSaveSQL = (): void => {
@@ -99,31 +114,46 @@ export function QueryEditor(): JSX.Element {
     URL.revokeObjectURL(url)
   }
 
-  const handleOptimizeSQL = async (): Promise<void> => {
-    if (!activeTabId || !activeTab?.connectionId) return
-
-    const selection = editorRef.current?.getSelection()
-    const model = editorRef.current?.getModel()
-    const selectedSql =
-      selection && model && !selection.isEmpty()
-        ? model.getValueInRange(selection).trim()
-        : ''
-    const sqlToOptimize = selectedSql || activeTab.sql.trim()
-    if (!sqlToOptimize) return
-
-    await optimizeSQL(
-      activeTabId,
-      sqlToOptimize,
-      activeTab.connectionId,
-      activeTab.selectedDatabase ?? undefined
-    )
-  }
-
-
   const handleMount: OnMount = (ed, monaco) => {
+    for (const [name, background, foreground, line] of [
+      ['dark', '#15191f', '#e4e9ef', '#8996a5'],
+      ['light', '#f7f8fa', '#1f2730', '#6a7886'],
+      ['light-blue', '#f4f8fb', '#16212b', '#5e7285']
+    ])
+      monaco.editor.defineTheme(`nexsql-${name}`, {
+        base: name === 'dark' ? 'vs-dark' : 'vs',
+        inherit: true,
+        rules: [],
+        colors: {
+          'editor.background': background,
+          'editor.foreground': foreground,
+          'editorLineNumber.foreground': line,
+          'editor.lineHighlightBorder': '#00000000',
+          'editor.selectionBackground': name === 'dark' ? '#294a55' : '#cfe5ef'
+        }
+      })
+    monaco.editor.setTheme(`nexsql-${usePrefsStore.getState().theme}`)
     editorRef.current = ed
     ed.addCommand(KeyMod.CtrlCmd | KeyCode.Enter, () => handleRun())
     ed.addCommand(KeyCode.F5, () => handleRun())
+    ed.addCommand(KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.Enter, () => {
+      const id = activeTabIdRef.current
+      if (id) void useQueryStore.getState().cancelQuery(id)
+    })
+    ed.onDidChangeCursorSelection(() => {
+      const selection = ed.getSelection()
+      const selected =
+        selection && !selection.isEmpty() ? ed.getModel()?.getValueInRange(selection) : ''
+      try {
+        const tab = useQueryStore.getState().tabs.find((t) => t.id === activeTabIdRef.current)
+        const conn = useConnectionStore
+          .getState()
+          .connections.find((c) => c.id === tab?.connectionId)
+        setSelectionCount(selected ? splitSQL(selected, conn?.type).length : 0)
+      } catch {
+        setSelectionCount(selected ? 1 : 0)
+      }
+    })
 
     completionDisposableRef.current?.dispose()
     completionDisposableRef.current = monaco.languages.registerCompletionItemProvider('sql', {
@@ -169,15 +199,19 @@ export function QueryEditor(): JSX.Element {
                   cols = cached.columns
                 } else {
                   // tableColumnsRef 也没有（超大库），异步拉取后重新触发补全
-                  const tab = useQueryStore.getState().tabs.find((t) => t.id === activeTabIdRef.current)
+                  const tab = useQueryStore
+                    .getState()
+                    .tabs.find((t) => t.id === activeTabIdRef.current)
                   const connectionId = tab?.connectionId
                   if (connectionId && window.db) {
-                    const targetDb = parts.length > 1
-                      ? normalizeSqlIdentifier(parts[0])
-                      : (tab?.selectedDatabase ?? undefined)
-                    window.db.getTableColumns(connectionId, tableName, targetDb)
+                    const targetDb =
+                      parts.length > 1
+                        ? normalizeSqlIdentifier(parts[0])
+                        : (tab?.selectedDatabase ?? undefined)
+                    window.db
+                      .getTableColumns(connectionId, tableName, targetDb)
                       .then((columns) => {
-                        if (columns.length > 0) {
+                        if (activeTabIdRef.current === tab?.id && columns.length > 0) {
                           aliasColumnsRef.current.set(qKey, columns)
                           tableColumnsRef.current = [
                             ...tableColumnsRef.current,
@@ -219,7 +253,7 @@ export function QueryEditor(): JSX.Element {
 
     // 内容变化时同步更新 alias 缓存（仅增量更新，不 clear）
     let prefetchTimer: ReturnType<typeof setTimeout> | null = null
-    ed.onDidChangeModelContent(() => {
+    const contentSubscription = ed.onDidChangeModelContent(() => {
       if (prefetchTimer) clearTimeout(prefetchTimer)
       prefetchTimer = setTimeout(() => {
         const sql = ed.getValue()
@@ -259,9 +293,10 @@ export function QueryEditor(): JSX.Element {
 
             if (aliasColumnsRef.current.has(qKey)) continue // 表名未变且已缓存，跳过
 
-            const targetDb = parts.length > 1
-              ? normalizeSqlIdentifier(parts[0])
-              : (tab?.selectedDatabase ?? undefined)
+            const targetDb =
+              parts.length > 1
+                ? normalizeSqlIdentifier(parts[0])
+                : (tab?.selectedDatabase ?? undefined)
 
             const cached = tableColumnsRef.current.find(
               (e) => normalizeSqlIdentifier(e.table).toLowerCase() === tableName.toLowerCase()
@@ -272,11 +307,11 @@ export function QueryEditor(): JSX.Element {
               continue
             }
 
-            const columns = await window.db!
-              .getTableColumns(connectionId, tableName, targetDb)
+            const columns = await window
+              .db!.getTableColumns(connectionId, tableName, targetDb)
               .catch(() => [])
 
-            if (columns.length > 0) {
+            if (activeTabIdRef.current === tabId && columns.length > 0) {
               aliasColumnsRef.current.set(qKey, columns)
               aliasTableRef.current.set(qKey, tableName.toLowerCase())
               tableColumnsRef.current = [
@@ -287,6 +322,10 @@ export function QueryEditor(): JSX.Element {
           }
         })()
       }, 400)
+    })
+    ed.onDidDispose(() => {
+      if (prefetchTimer) clearTimeout(prefetchTimer)
+      contentSubscription.dispose()
     })
   }
 
@@ -319,6 +358,10 @@ export function QueryEditor(): JSX.Element {
 
   useEffect(() => {
     let cancelled = false
+    aliasColumnsRef.current.clear()
+    aliasTableRef.current.clear()
+    tableColumnsRef.current = []
+    completionSuggestionsRef.current = baseSqlSuggestions()
 
     const loadCompletions = async (): Promise<void> => {
       if (!activeTab?.connectionId || !window.db) {
@@ -352,12 +395,13 @@ export function QueryEditor(): JSX.Element {
         const columnLists = await Promise.all(
           tableEntries.map(async (entry) => ({
             ...entry,
-            columns: await window.db!
-              .getTableColumns(activeTab.connectionId!, entry.table, entry.database)
+            columns: await window
+              .db!.getTableColumns(activeTab.connectionId!, entry.table, entry.database)
               .catch(() => [])
           }))
         )
 
+        if (cancelled) return
         tableColumnsRef.current = columnLists.filter((e) => e.columns.length > 0)
 
         for (const item of columnLists) {
@@ -379,7 +423,7 @@ export function QueryEditor(): JSX.Element {
           }
         }
       } else {
-          // 表数量超过阈值时不预加载所有字段，依赖 prefetch 按需加载
+        // 表数量超过阈值时不预加载所有字段，依赖 prefetch 按需加载
       }
 
       if (!cancelled) {
@@ -405,7 +449,7 @@ export function QueryEditor(): JSX.Element {
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-1 bg-app-sidebar border-b border-app-border shrink-0">
+      <div className="query-toolbar flex items-center gap-2 px-3 py-1 bg-app-sidebar border-b border-app-border shrink-0">
         <button
           onClick={handleRun}
           disabled={!isConnected || activeTab.isLoading}
@@ -417,18 +461,20 @@ export function QueryEditor(): JSX.Element {
           ) : (
             <Play size={12} />
           )}
-          执行
+          {selectionCount > 0 ? `执行选中 (${selectionCount})` : '执行全部'}
         </button>
 
-        <button
-          onClick={handleOptimizeSQL}
-          disabled={!activeTab.connectionId || !activeTab.sql.trim() || isOptimizing}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-          title="AI 优化 SQL（优先分析选中内容）"
-        >
-          {isOptimizing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-          AI 优化
-        </button>
+        {activeTab.isLoading && (
+          <button
+            onClick={() => void useQueryStore.getState().cancelQuery(activeTab.id)}
+            disabled={activeTab.isCancelling}
+            className="query-stop"
+            title="停止本次执行 · ⌘/Ctrl Shift Enter"
+          >
+            <Square size={12} />
+            {activeTab.isCancelling ? '正在停止…' : '停止'}
+          </button>
+        )}
 
         <button
           onClick={handleFormatSQL}
@@ -441,16 +487,6 @@ export function QueryEditor(): JSX.Element {
         </button>
 
         <button
-          onClick={handleCompressSQL}
-          disabled={!activeTab.sql.trim()}
-          className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-          title="压缩 SQL（去除换行与注释）"
-        >
-          <Minimize2 size={12} />
-          压缩
-        </button>
-
-        <button
           onClick={handleSaveSQL}
           disabled={!activeTab.sql.trim()}
           className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
@@ -460,10 +496,31 @@ export function QueryEditor(): JSX.Element {
           保存
         </button>
 
+        <select
+          aria-label="查询超时"
+          title="每次执行的最长时间，超时会请求取消"
+          value={activeTab.timeoutMs ?? 300000}
+          disabled={activeTab.isLoading}
+          onChange={(event) =>
+            useQueryStore
+              .getState()
+              .patchTab(activeTab.id, { timeoutMs: Number(event.target.value) })
+          }
+          className="bg-app-input border border-app-border rounded-md px-2 py-1 text-xs text-text-secondary"
+        >
+          <option value={30000}>超时 30 秒</option>
+          <option value={60000}>超时 1 分钟</option>
+          <option value={300000}>超时 5 分钟</option>
+          <option value={0}>不限时</option>
+        </select>
         {/* Connection picker */}
         <div className="relative">
           <button
-            onClick={() => { setShowConnPicker((v) => !v); setShowDbPicker(false) }}
+            disabled={activeTab.isLoading}
+            onClick={() => {
+              setShowConnPicker((v) => !v)
+              setShowDbPicker(false)
+            }}
             className={clsx(
               'flex items-center gap-1 px-2 py-1 text-xs rounded border transition-colors',
               connection
@@ -474,7 +531,9 @@ export function QueryEditor(): JSX.Element {
           >
             {connection ? (
               <>
-                <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isConnected ? 'bg-accent-green' : 'bg-text-muted'}`} />
+                <span
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${isConnected ? 'bg-accent-green' : 'bg-text-muted'}`}
+                />
                 <span className="max-w-[120px] truncate">{connection.name}</span>
               </>
             ) : (
@@ -495,7 +554,9 @@ export function QueryEditor(): JSX.Element {
                       onClick={() => handleSelectConnection(c.id)}
                       className={clsx(
                         'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-app-active transition-colors',
-                        activeTab.connectionId === c.id ? 'text-accent-blue' : 'text-text-secondary hover:text-text-primary'
+                        activeTab.connectionId === c.id
+                          ? 'text-accent-blue'
+                          : 'text-text-secondary hover:text-text-primary'
                       )}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-accent-green shrink-0" />
@@ -512,12 +573,13 @@ export function QueryEditor(): JSX.Element {
         {connection && isConnected && (
           <div className="relative">
             <button
+              disabled={activeTab.isLoading}
               onClick={showDbPicker ? () => setShowDbPicker(false) : handleOpenDbPicker}
               className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-app-border text-text-secondary hover:border-accent-blue hover:text-text-primary transition-colors"
               title="切换数据库"
             >
               <span className="max-w-[100px] truncate">
-                {activeTab.selectedDatabase || (connection.database || '默认库')}
+                {activeTab.selectedDatabase || connection.database || '默认库'}
               </span>
               <ChevronDown size={10} className="opacity-60 shrink-0" />
             </button>
@@ -552,36 +614,29 @@ export function QueryEditor(): JSX.Element {
         )}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 border-b border-app-border bg-app-panel shrink-0">
-        <div className="flex items-center gap-1 text-2xs text-text-muted">
-          <BrainCircuit size={11} />
-          <span>语句感知</span>
+      {editorError && (
+        <div role="alert" className="px-4 py-2 text-xs text-accent-red">
+          {editorError}
         </div>
-        {referencedTables.length > 0 ? (
-          referencedTables.map((table) => (
-            <span key={table} className="rounded bg-app-hover px-2 py-0.5 text-2xs text-text-secondary">
-              表 {table}
-            </span>
-          ))
-        ) : (
-          <span className="text-2xs text-text-muted">当前语句未识别到明确表名</span>
-        )}
-        {aliasEntries.slice(0, 4).map(([alias, table]) => (
-          <span key={alias} className="rounded border border-app-border px-2 py-0.5 text-2xs text-text-muted">
-            {alias} {'->'} {table}
-          </span>
-        ))}
-      </div>
+      )}
 
       {/* Monaco Editor */}
       <div className="flex-1 selectable">
         <MonacoEditor
+          path={`nexsql://query/${activeTab.id}.sql`}
+          keepCurrentModel
+          saveViewState
           height="100%"
           language="sql"
-          theme={theme === 'light' || theme === 'light-blue' ? 'vs' : 'vs-dark'}
+          theme={`nexsql-${theme}`}
           value={activeTab.sql}
           onChange={(value) => {
-            if (activeTabId) updateTabSQL(activeTabId, value ?? '')
+            const modelId = editorRef.current
+              ?.getModel()
+              ?.uri.path.split('/')
+              .pop()
+              ?.replace(/\.sql$/, '')
+            if (modelId) updateTabSQL(modelId, value ?? '')
           }}
           onMount={handleMount}
           options={{
@@ -628,7 +683,8 @@ function getCurrentSqlStatement(textUntilCursor: string): string {
 
 function extractReferencedTables(sql: string): string[] {
   const matches = new Set<string>()
-  const pattern = /\b(?:from|join|update|into|table)\s+((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+)(?:\s*\.\s*(?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+))?)/gi
+  const pattern =
+    /\b(?:from|join|update|into|table)\s+((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+)(?:\s*\.\s*(?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+))?)/gi
 
   let match: RegExpExecArray | null
   while ((match = pattern.exec(sql)) !== null) {
@@ -642,10 +698,24 @@ function extractReferencedTables(sql: string): string[] {
 
 function parseTableAliases(sql: string): Record<string, string> {
   const aliasMap: Record<string, string> = {}
-  const pattern = /\b(?:from|join)\s+((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+)(?:\s*\.\s*(?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+))?)\s+(?:as\s+)?((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+))/gi
+  const pattern =
+    /\b(?:from|join)\s+((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+)(?:\s*\.\s*(?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+))?)\s+(?:as\s+)?((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z0-9_]+))/gi
   const reserved = new Set([
-    'on', 'where', 'group', 'order', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'join', 'limit',
-    'having', 'union', 'offset'
+    'on',
+    'where',
+    'group',
+    'order',
+    'left',
+    'right',
+    'inner',
+    'outer',
+    'full',
+    'cross',
+    'join',
+    'limit',
+    'having',
+    'union',
+    'offset'
   ])
 
   let match: RegExpExecArray | null
@@ -686,7 +756,7 @@ function buildAliasSuggestions(
     if (typed && alias !== typed) continue
 
     const tableKey = normalizeSqlIdentifier(table).toLowerCase()
-    const plainTable = tableKey.includes('.') ? tableKey.split('.').pop() ?? tableKey : tableKey
+    const plainTable = tableKey.includes('.') ? (tableKey.split('.').pop() ?? tableKey) : tableKey
     const columnEntry = tableToColumns.get(tableKey) ?? tableToColumns.get(plainTable)
     if (!columnEntry) continue
 
@@ -787,7 +857,9 @@ function extractProjectionAlias(expr: string): string | null {
     if (!reserved.has(maybeAlias.toLowerCase())) return maybeAlias
   }
 
-  const plainCol = cleaned.match(/((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z_][\w$]*)(?:\s*\.\s*(?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z_][\w$]*))*)\s*$/)
+  const plainCol = cleaned.match(
+    /((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z_][\w$]*)(?:\s*\.\s*(?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z_][\w$]*))*)\s*$/
+  )
   if (!plainCol) return null
   const normalized = plainCol[1].replace(/\s*\.\s*/g, '.')
   const lastPart = normalized.split('.').pop() ?? normalized
@@ -862,8 +934,21 @@ function parseSubqueryAliases(sql: string): Record<string, string[]> {
   const keywordPattern = /\b(from|join)\b/gi
   const aliasPattern = /^\s*\)\s*(?:as\s+)?((?:\[[^\]]+\]|`[^`]+`|"[^"]+"|[a-zA-Z_][\w$]*))/i
   const reserved = new Set([
-    'on', 'where', 'group', 'order', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'join', 'limit',
-    'having', 'union', 'offset'
+    'on',
+    'where',
+    'group',
+    'order',
+    'left',
+    'right',
+    'inner',
+    'outer',
+    'full',
+    'cross',
+    'join',
+    'limit',
+    'having',
+    'union',
+    'offset'
   ])
 
   let keywordMatch: RegExpExecArray | null
@@ -952,8 +1037,22 @@ function sanitizeFileName(name: string): string {
 
 function baseSqlSuggestions(): Array<Omit<languages.CompletionItem, 'range'>> {
   return [
-    'SELECT', 'FROM', 'WHERE', 'ORDER BY', 'GROUP BY', 'LIMIT', 'INSERT INTO', 'UPDATE', 'DELETE',
-    'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'CREATE TABLE', 'ALTER TABLE', 'DROP TABLE'
+    'SELECT',
+    'FROM',
+    'WHERE',
+    'ORDER BY',
+    'GROUP BY',
+    'LIMIT',
+    'INSERT INTO',
+    'UPDATE',
+    'DELETE',
+    'JOIN',
+    'LEFT JOIN',
+    'RIGHT JOIN',
+    'INNER JOIN',
+    'CREATE TABLE',
+    'ALTER TABLE',
+    'DROP TABLE'
   ].map((keyword) => ({
     label: keyword,
     kind: languages.CompletionItemKind.Keyword,

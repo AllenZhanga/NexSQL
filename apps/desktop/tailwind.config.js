@@ -7,20 +7,20 @@ module.exports = {
       colors: {
         // VS Code-inspired dark theme
         app: {
-          bg: '#1e1e1e',
-          sidebar: '#252526',
-          panel: '#1e1e1e',
-          header: '#3c3c3c',
-          border: '#404040',
-          hover: '#2a2d2e',
-          active: '#094771',
-          input: '#3c3c3c'
+          bg: 'var(--app-bg)',
+          sidebar: 'var(--app-sidebar)',
+          panel: 'var(--app-panel)',
+          header: 'var(--app-header)',
+          border: 'var(--app-border)',
+          hover: 'var(--app-hover)',
+          active: 'var(--app-active)',
+          input: 'var(--app-input)'
         },
         text: {
-          primary: '#cccccc',
-          secondary: '#9d9d9d',
-          muted: '#6b6b6b',
-          link: '#4fc1ff'
+          primary: 'var(--text-primary)',
+          secondary: 'var(--text-secondary)',
+          muted: 'var(--text-muted)',
+          link: 'var(--text-link)'
         },
         accent: {
           blue: '#0078d4',
@@ -31,17 +31,10 @@ module.exports = {
         }
       },
       fontFamily: {
-        mono: [
-          'JetBrains Mono',
-          'Fira Code',
-          'Cascadia Code',
-          'Consolas',
-          'Monaco',
-          'monospace'
-        ]
+        mono: ['JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Monaco', 'monospace']
       },
       fontSize: {
-        '2xs': '0.625rem'
+        '2xs': '0.6875rem'
       }
     }
   },

@@ -25,26 +25,26 @@ It brings SQL workflow, table data management, Redis key operations, and AI-assi
 ### Highlights
 
 - Multi-engine support: MySQL, PostgreSQL, SQL Server (MSSQL), SQLite, Redis
-- SQL editor: Monaco + SQL formatting + selected-text execution
+- SQL editor: Monaco with per-tab undo, draft recovery, dialect-aware formatting, selected-script execution, multiple results, cancellation, and configurable timeout
 - Table data view: filtering, sorting, pagination, staged CRUD, CSV export
 - SQL helper actions: copy INSERT/UPDATE SQL, export SQL to file
 - Schema explorer and table designer: columns, indexes, DDL preview
-- AI workspace: NL2SQL, SQL optimization, schema design SQL, data dictionary generation
-- Semantic schema index and E-R relation modeling (manual + AI inference workflow)
+- AI: natural language to SQL with real schema context and a new tab for reviewing generated queries
+- Independent developer workbench: JSON formatting, timestamps, and Markdown
 - Connection management: group/tag organization and encrypted credential storage
 - App preferences: language (EN/ZH), theme, editor font size
 
 ### Architecture
 
-| Layer | Technology |
-|---|---|
-| Desktop shell | Electron + electron-vite |
-| UI | React + TypeScript + Tailwind CSS |
-| Editor | Monaco Editor |
-| Data grid | TanStack Table + virtualization |
-| State | Zustand |
-| Local storage | better-sqlite3 |
-| DB drivers | mysql2, pg, mssql, better-sqlite3, redis |
+| Layer         | Technology                               |
+| ------------- | ---------------------------------------- |
+| Desktop shell | Electron + electron-vite                 |
+| UI            | React + TypeScript + Tailwind CSS        |
+| Editor        | Monaco Editor                            |
+| Data grid     | TanStack Table + virtualization          |
+| State         | Zustand                                  |
+| Local storage | better-sqlite3                           |
+| DB drivers    | mysql2, pg, mssql, better-sqlite3, redis |
 
 ### Quick Start
 
@@ -135,25 +135,25 @@ NexSQL 是一个基于 Electron + React 的跨平台桌面数据库客户端。
 ### 核心能力
 
 - 多引擎支持：MySQL、PostgreSQL、SQL Server（MSSQL）、SQLite、Redis
-- SQL 编辑器：Monaco + SQL 格式化 + 选中执行
+- SQL 编辑器：Monaco + 独立标签撤销 + 草稿恢复 + 方言格式化 + 选中多条执行 + 多结果 + 取消与超时
 - 表数据视图：筛选、排序、分页、暂存式 CRUD、CSV 导出
 - SQL 辅助操作：复制 INSERT/UPDATE SQL、SQL 落盘
 - 结构浏览与表设计器（列、索引、DDL 预览）
-- AI 工作台：自然语言生成 SQL、SQL 优化诊断、设计 SQL 生成、数据字典生成
-- 语义索引与 E-R 关系建模（手工连线 + AI 推断候选）
+- AI：自然语言生成 SQL，读取真实字段上下文，生成结果在新标签中审查
+- 独立开发工作台：JSON 格式化、时间戳转换、Markdown
 - 连接管理：分组/标签组织、本地凭据加密存储
 - 应用设置：中英文、主题、编辑器字号
 
 ### 技术栈
 
-| 层级 | 技术 |
-|---|---|
-| 桌面容器 | Electron + electron-vite |
-| 前端 | React + TypeScript + Tailwind CSS |
-| 编辑器 | Monaco Editor |
-| 数据表格 | TanStack Table + 虚拟滚动 |
-| 状态管理 | Zustand |
-| 本地存储 | better-sqlite3 |
+| 层级       | 技术                                     |
+| ---------- | ---------------------------------------- |
+| 桌面容器   | Electron + electron-vite                 |
+| 前端       | React + TypeScript + Tailwind CSS        |
+| 编辑器     | Monaco Editor                            |
+| 数据表格   | TanStack Table + 虚拟滚动                |
+| 状态管理   | Zustand                                  |
+| 本地存储   | better-sqlite3                           |
 | 数据库驱动 | mysql2、pg、mssql、better-sqlite3、redis |
 
 ### 快速开始
@@ -235,3 +235,31 @@ NexSQL/
 
 MIT，详见 [LICENSE](LICENSE)。
 
+## SQL execution behavior / SQL 执行约定
+
+- Run executes the selection when present, otherwise the entire editor. `Ctrl/Cmd+Enter` or `F5` runs; `Ctrl/Cmd+Shift+Enter` cancels.
+- Each execution has its own database session. All statements in that execution share the session; temporary tables and variables do not persist into the next execution.
+- MySQL, PostgreSQL and SQLite scripts execute sequentially and stop at the first failed statement. Previously committed statements are not undone. Include `BEGIN` and `COMMIT` in the same execution when a transaction is required. An uncommitted transaction is rolled back on session close and reported.
+- SQL Server preserves T-SQL batches (including local variables). Use `GO` on its own line to separate batches. A failing batch stops later batches; behavior inside a batch follows SQL Server (`XACT_ABORT ON`). `GO n` repetition is deliberately rejected.
+- MySQL `DELIMITER` directives, PostgreSQL dollar-quoted blocks, quoted identifiers, comments, and SQLite triggers are preserved. Non-default SQL lexical modes (such as changing `NO_BACKSLASH_ESCAPES` within a script) are not supported by the script splitter.
+- Cancel targets only the current execution. MySQL uses `KILL QUERY`, PostgreSQL uses `pg_cancel_backend`, SQL Server uses request cancellation, and SQLite execution runs in a disposable process so native queries can be terminated. Cancellation never promises to undo committed writes; an interrupted write may require checking its outcome.
+- Query timeout defaults to five minutes and can be changed in the toolbar, including unlimited execution.
+- PostgreSQL metadata currently browses the `public` schema in the selected database.
+- The result grid currently buffers full results; avoid unbounded queries on large tables.
+
+执行选区优先，无选区执行全文。每次执行使用独立会话，同次执行内共享临时表和变量。出错停止后续语句/批次，取消不会撤销已提交的数据；事务的开始和提交应放在同一次执行中。运行中不能关闭标签或切换它的连接/数据库，但可以继续编辑下一版 SQL。
+
+## Verification
+
+```bash
+# Build and run parser, state, and real SQLite process tests
+pnpm --filter nexsql-desktop test:sql
+
+# Optional MySQL/PostgreSQL integration tests against disposable test instances only
+NEXSQL_TEST_MYSQL_PORT=<port> NEXSQL_TEST_PG_PORT=<port> node --test apps/desktop/tests/*.test.cjs
+
+# Local UI preview backed by a disposable SQLite fixture (after build)
+pnpm --filter nexsql-desktop preview:ui
+```
+
+The optional integration fixtures use database `nexsql_test`, test password `nexsql_test_only`, and local loopback ports. They create test tables/procedures and must never point to business databases. The UI preview only listens on `127.0.0.1:4179` and does not read saved connections or model credentials.

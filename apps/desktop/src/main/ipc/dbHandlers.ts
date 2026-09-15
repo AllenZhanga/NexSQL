@@ -1,3 +1,4 @@
+import { executeBatch, cancelQuery } from '../db/QueryRunner'
 import { ipcMain } from 'electron'
 import type { ConnectionFormData } from '@shared/types/connection'
 import {
@@ -12,36 +13,39 @@ import {
   exportConnections,
   importConnections
 } from '../db/ConnectionManager'
-import { 
-  executeQuery, 
-  executeTransaction, 
-  getDatabases, 
-  getSchema, 
-  getHistory, 
-  getTableColumns, 
-  getTableIndexes, 
-  getTableDDL, 
+import {
+  executeQuery,
+  executeTransaction,
+  getDatabases,
+  getSchema,
+  getHistory,
+  getTableColumns,
+  getTableIndexes,
+  getTableDDL,
   exportTableSQL,
   exportDatabaseSQL,
   importDatabaseSQL,
   createDatabase,
   dropDatabase,
-  alterDatabaseCharset 
+  alterDatabaseCharset
 } from '../db/QueryExecutor'
 import { deleteRedisKey, getRedisKeyDetail, getRedisKeys, updateRedisKey } from '../db/redis'
 import type { RedisKeyUpdateRequest } from '@shared/types/redis'
 
 export function registerDbHandlers(): void {
+  ipcMain.handle(
+    'db:executeBatch',
+    (event, id: string, connectionId: string, sql: string, database?: string, timeoutMs?: number) =>
+      executeBatch(event.sender, id, connectionId, sql, database, timeoutMs)
+  )
+  ipcMain.handle('db:cancelQuery', (event, id: string) => cancelQuery(id, event.sender.id))
   ipcMain.handle('db:listConnections', async () => {
     return listConnections()
   })
 
-  ipcMain.handle(
-    'db:addConnection',
-    async (_event, formData: ConnectionFormData) => {
-      return addConnection(formData)
-    }
-  )
+  ipcMain.handle('db:addConnection', async (_event, formData: ConnectionFormData) => {
+    return addConnection(formData)
+  })
 
   ipcMain.handle(
     'db:updateConnection',
@@ -83,19 +87,13 @@ export function registerDbHandlers(): void {
     }
   )
 
-  ipcMain.handle(
-    'db:getDatabases',
-    async (_event, connectionId: string) => {
-      return getDatabases(connectionId)
-    }
-  )
+  ipcMain.handle('db:getDatabases', async (_event, connectionId: string) => {
+    return getDatabases(connectionId)
+  })
 
-  ipcMain.handle(
-    'db:getSchema',
-    async (_event, connectionId: string, database?: string) => {
-      return getSchema(connectionId, database)
-    }
-  )
+  ipcMain.handle('db:getSchema', async (_event, connectionId: string, database?: string) => {
+    return getSchema(connectionId, database)
+  })
 
   ipcMain.handle(
     'db:getTableColumns',
@@ -139,16 +137,20 @@ export function registerDbHandlers(): void {
     }
   )
 
-  ipcMain.handle(
-    'db:getHistory',
-    async (_event, connectionId?: string, limit?: number) => {
-      return getHistory(connectionId, limit)
-    }
-  )
+  ipcMain.handle('db:getHistory', async (_event, connectionId?: string, limit?: number) => {
+    return getHistory(connectionId, limit)
+  })
 
   ipcMain.handle(
     'db:getRedisKeys',
-    async (_event, connectionId: string, pattern?: string, database?: string, cursor?: string, pageSize?: number) => {
+    async (
+      _event,
+      connectionId: string,
+      pattern?: string,
+      database?: string,
+      cursor?: string,
+      pageSize?: number
+    ) => {
       return getRedisKeys(connectionId, pattern, database, cursor, pageSize)
     }
   )
@@ -167,12 +169,9 @@ export function registerDbHandlers(): void {
     }
   )
 
-  ipcMain.handle(
-    'db:updateRedisKey',
-    async (_event, request: RedisKeyUpdateRequest) => {
-      return updateRedisKey(request)
-    }
-  )
+  ipcMain.handle('db:updateRedisKey', async (_event, request: RedisKeyUpdateRequest) => {
+    return updateRedisKey(request)
+  })
 
   ipcMain.handle('db:duplicateConnection', async (_event, id: string) => {
     return duplicateConnection(id)
@@ -188,17 +187,20 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(
     'db:createDatabase',
-    async (_event, connectionId: string, database: string, charset?: string, collation?: string) => {
+    async (
+      _event,
+      connectionId: string,
+      database: string,
+      charset?: string,
+      collation?: string
+    ) => {
       return createDatabase(connectionId, database, charset, collation)
     }
   )
 
-  ipcMain.handle(
-    'db:dropDatabase',
-    async (_event, connectionId: string, database: string) => {
-      return dropDatabase(connectionId, database)
-    }
-  )
+  ipcMain.handle('db:dropDatabase', async (_event, connectionId: string, database: string) => {
+    return dropDatabase(connectionId, database)
+  })
 
   ipcMain.handle(
     'db:alterDatabaseCharset',

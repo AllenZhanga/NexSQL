@@ -124,16 +124,30 @@ export function DevWorkbench(): JSX.Element {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-      <div className="shrink-0 rounded border border-app-border bg-app-panel p-3">
-        <div className="text-xs font-semibold text-text-primary">{t('devtools.title')}</div>
-        <div className="mt-1 text-2xs text-text-muted">{t('devtools.subtitle')}</div>
+    <div className="dev-workbench flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+      <div className="dev-workbench-heading">
+        <div className="text-lg font-semibold tracking-tight text-text-primary">
+          {t('devtools.title')}
+        </div>
+        <div className="mt-2 text-xs text-text-muted">{t('devtools.subtitle')}</div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-1 border-b border-app-border pb-2">
-        <SubTabButton label={t('devtools.tab.json')} active={tab === 'json'} onClick={() => setTab('json')} />
-        <SubTabButton label={t('devtools.tab.timestamp')} active={tab === 'timestamp'} onClick={() => setTab('timestamp')} />
-        <SubTabButton label={t('devtools.tab.markdown')} active={tab === 'markdown'} onClick={() => setTab('markdown')} />
+      <div className="dev-workbench-tabs">
+        <SubTabButton
+          label={t('devtools.tab.json')}
+          active={tab === 'json'}
+          onClick={() => setTab('json')}
+        />
+        <SubTabButton
+          label={t('devtools.tab.timestamp')}
+          active={tab === 'timestamp'}
+          onClick={() => setTab('timestamp')}
+        />
+        <SubTabButton
+          label={t('devtools.tab.markdown')}
+          active={tab === 'markdown'}
+          onClick={() => setTab('markdown')}
+        />
       </div>
 
       {tab === 'json' ? (
@@ -142,6 +156,7 @@ export function DevWorkbench(): JSX.Element {
             <div className="flex min-h-0 flex-col gap-2 overflow-hidden">
               <div className="text-xs text-text-secondary">{t('devtools.input')}</div>
               <textarea
+                spellCheck={false}
                 value={jsonInput}
                 onChange={(event) => setJsonInput(event.target.value)}
                 placeholder={t('devtools.json.placeholder')}
@@ -149,13 +164,22 @@ export function DevWorkbench(): JSX.Element {
                 className="min-h-0 flex-1 resize-none overflow-auto rounded border border-app-border bg-app-input px-2 py-2 text-xs text-text-primary focus:border-accent-blue focus:outline-none"
               />
               <div className="flex shrink-0 flex-wrap items-center gap-2">
-                <button onClick={handleJsonFormat} className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600">
+                <button
+                  onClick={handleJsonFormat}
+                  className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600"
+                >
                   {t('devtools.json.format')}
                 </button>
-                <button onClick={handleJsonMinify} className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary">
+                <button
+                  onClick={handleJsonMinify}
+                  className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
+                >
                   {t('devtools.json.minify')}
                 </button>
-                <button onClick={handleJsonUnescape} className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary">
+                <button
+                  onClick={handleJsonUnescape}
+                  className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
+                >
                   {t('devtools.unescape')}
                 </button>
                 <button
@@ -182,25 +206,44 @@ export function DevWorkbench(): JSX.Element {
                 </button>
               </div>
               <textarea
+                spellCheck={false}
                 value={jsonOutput}
                 readOnly
                 rows={14}
                 className="min-h-0 flex-1 resize-none overflow-auto rounded border border-app-border bg-app-panel px-2 py-2 text-xs text-text-primary focus:outline-none"
               />
-              <div className={clsx('shrink-0 text-2xs', jsonValid ? 'text-accent-green' : 'text-text-muted')}>
-                {jsonInput.trim() ? (jsonValid ? t('devtools.json.valid') : t('devtools.json.invalid')) : t('devtools.hint')}
+              <div
+                className={clsx(
+                  'shrink-0 text-2xs',
+                  jsonValid ? 'text-accent-green' : 'text-text-muted'
+                )}
+              >
+                {jsonInput.trim()
+                  ? jsonValid
+                    ? t('devtools.json.valid')
+                    : t('devtools.json.invalid')
+                  : t('devtools.hint')}
               </div>
             </div>
           </div>
-          {jsonError && <div className="shrink-0 rounded border border-accent-red bg-red-500/10 p-2 text-2xs text-accent-red">{jsonError}</div>}
+          {jsonError && (
+            <div className="shrink-0 rounded border border-accent-red bg-red-500/10 p-2 text-2xs text-accent-red">
+              {jsonError}
+            </div>
+          )}
         </div>
       ) : null}
 
       {tab === 'timestamp' ? (
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
           <div className="flex shrink-0 items-center justify-between rounded border border-app-border bg-app-panel px-3 py-2">
-            <div className="text-xs text-text-secondary">{t('devtools.timestamp.now')}: {Date.now()}</div>
-            <button onClick={handleFillNow} className="rounded border border-app-border px-2 py-1 text-2xs text-text-secondary hover:border-accent-blue hover:text-text-primary">
+            <div className="text-xs text-text-secondary">
+              {t('devtools.timestamp.now')}: {Date.now()}
+            </div>
+            <button
+              onClick={handleFillNow}
+              className="rounded border border-app-border px-2 py-1 text-2xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
+            >
               {t('devtools.timestamp.useNow')}
             </button>
           </div>
@@ -209,6 +252,7 @@ export function DevWorkbench(): JSX.Element {
             <div className="flex min-h-0 flex-col rounded border border-app-border bg-app-panel p-3">
               <div className="text-xs text-text-secondary">{t('devtools.timestamp.toDate')}</div>
               <textarea
+                spellCheck={false}
                 value={timestampInput}
                 onChange={(event) => setTimestampInput(event.target.value)}
                 placeholder={t('devtools.timestamp.timestampPlaceholder')}
@@ -216,19 +260,30 @@ export function DevWorkbench(): JSX.Element {
                 className="mt-2 shrink-0 rounded border border-app-border bg-app-input px-2 py-2 text-xs text-text-primary focus:border-accent-blue focus:outline-none"
               />
               <div className="mt-2 flex shrink-0 items-center gap-2">
-                <button onClick={handleTimestampToDate} className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600">
+                <button
+                  onClick={handleTimestampToDate}
+                  className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600"
+                >
                   {t('devtools.convert')}
                 </button>
-                <button onClick={() => void handleCopy(timestampToDateOutput)} className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary">
+                <button
+                  onClick={() => void handleCopy(timestampToDateOutput)}
+                  className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
+                >
                   {t('devtools.copy')}
                 </button>
               </div>
-              <pre className="mt-2 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded border border-app-border bg-app-bg p-2 text-2xs text-text-secondary">{timestampToDateOutput || '-'}</pre>
+              <pre className="mt-2 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded border border-app-border bg-app-bg p-2 text-2xs text-text-secondary">
+                {timestampToDateOutput || '-'}
+              </pre>
             </div>
 
             <div className="flex min-h-0 flex-col rounded border border-app-border bg-app-panel p-3">
-              <div className="text-xs text-text-secondary">{t('devtools.timestamp.toTimestamp')}</div>
+              <div className="text-xs text-text-secondary">
+                {t('devtools.timestamp.toTimestamp')}
+              </div>
               <textarea
+                spellCheck={false}
                 value={dateInput}
                 onChange={(event) => setDateInput(event.target.value)}
                 placeholder={t('devtools.timestamp.datePlaceholder')}
@@ -236,18 +291,30 @@ export function DevWorkbench(): JSX.Element {
                 className="mt-2 shrink-0 rounded border border-app-border bg-app-input px-2 py-2 text-xs text-text-primary focus:border-accent-blue focus:outline-none"
               />
               <div className="mt-2 flex shrink-0 items-center gap-2">
-                <button onClick={handleDateToTimestamp} className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600">
+                <button
+                  onClick={handleDateToTimestamp}
+                  className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600"
+                >
                   {t('devtools.convert')}
                 </button>
-                <button onClick={() => void handleCopy(dateToTimestampOutput)} className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary">
+                <button
+                  onClick={() => void handleCopy(dateToTimestampOutput)}
+                  className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
+                >
                   {t('devtools.copy')}
                 </button>
               </div>
-              <pre className="mt-2 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded border border-app-border bg-app-bg p-2 text-2xs text-text-secondary">{dateToTimestampOutput || '-'}</pre>
+              <pre className="mt-2 min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded border border-app-border bg-app-bg p-2 text-2xs text-text-secondary">
+                {dateToTimestampOutput || '-'}
+              </pre>
             </div>
           </div>
 
-          {timeError && <div className="shrink-0 rounded border border-accent-red bg-red-500/10 p-2 text-2xs text-accent-red">{timeError}</div>}
+          {timeError && (
+            <div className="shrink-0 rounded border border-accent-red bg-red-500/10 p-2 text-2xs text-accent-red">
+              {timeError}
+            </div>
+          )}
         </div>
       ) : null}
 
@@ -256,32 +323,44 @@ export function DevWorkbench(): JSX.Element {
           <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-2 gap-3 overflow-hidden lg:grid-cols-2 lg:grid-rows-1">
             <div className="min-w-0 overflow-hidden lg:flex lg:min-h-0 lg:flex-col">
               <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
-              <div className="text-xs text-text-secondary">{t('devtools.markdown.editor')}</div>
-              <textarea
-                value={markdownInput}
-                onChange={(event) => setMarkdownInput(event.target.value)}
-                placeholder={t('devtools.markdown.placeholder')}
-                rows={18}
-                className="min-h-0 flex-1 resize-none overflow-auto rounded border border-app-border bg-app-input px-2 py-2 font-mono text-xs text-text-primary focus:border-accent-blue focus:outline-none"
-              />
-              <div className="flex shrink-0 items-center gap-2">
-                <button onClick={handleMarkdownUnescape} className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary">
-                  {t('devtools.unescape')}
-                </button>
-                <button onClick={() => setMarkdownInput('')} className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary">
-                  {t('devtools.clear')}
-                </button>
-                <button onClick={() => void handleCopy(markdownInput)} className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600">
-                  {t('devtools.copy')}
-                </button>
-              </div>
+                <div className="text-xs text-text-secondary">{t('devtools.markdown.editor')}</div>
+                <textarea
+                  spellCheck={false}
+                  value={markdownInput}
+                  onChange={(event) => setMarkdownInput(event.target.value)}
+                  placeholder={t('devtools.markdown.placeholder')}
+                  rows={18}
+                  className="min-h-0 flex-1 resize-none overflow-auto rounded border border-app-border bg-app-input px-2 py-2 font-mono text-xs text-text-primary focus:border-accent-blue focus:outline-none"
+                />
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    onClick={handleMarkdownUnescape}
+                    className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
+                  >
+                    {t('devtools.unescape')}
+                  </button>
+                  <button
+                    onClick={() => setMarkdownInput('')}
+                    className="rounded border border-app-border px-2.5 py-1 text-xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
+                  >
+                    {t('devtools.clear')}
+                  </button>
+                  <button
+                    onClick={() => void handleCopy(markdownInput)}
+                    className="rounded bg-accent-blue px-2.5 py-1 text-xs text-white hover:bg-blue-600"
+                  >
+                    {t('devtools.copy')}
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="min-w-0 overflow-hidden lg:flex lg:min-h-0 lg:flex-col">
               <div className="flex h-full min-h-0 flex-col gap-2 overflow-hidden">
                 <div className="flex shrink-0 items-center justify-between gap-2">
-                  <div className="text-xs text-text-secondary">{t('devtools.markdown.preview')}</div>
+                  <div className="text-xs text-text-secondary">
+                    {t('devtools.markdown.preview')}
+                  </div>
                   <button
                     onClick={() => void handleCopy(markdownInput)}
                     className="rounded border border-app-border px-2 py-1 text-2xs text-text-secondary hover:border-accent-blue hover:text-text-primary"
@@ -290,13 +369,15 @@ export function DevWorkbench(): JSX.Element {
                   </button>
                 </div>
                 <div className="min-h-0 flex-1 max-w-full overflow-auto rounded border border-app-border bg-app-panel p-3 text-sm text-text-primary">
-                {markdownInput.trim() ? (
-                  <div className="max-w-none break-words leading-6 [overflow-wrap:anywhere] [&_code]:break-all [&_li]:break-words [&_p]:break-words [&_pre]:max-w-full [&_pre]:overflow-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-auto [&_td]:break-words [&_th]:break-words">
-                    <ReactMarkdown rehypePlugins={[rehypeSanitize]}>{markdownInput}</ReactMarkdown>
-                  </div>
-                ) : (
-                  <div className="text-2xs text-text-muted">{t('devtools.markdown.empty')}</div>
-                )}
+                  {markdownInput.trim() ? (
+                    <div className="max-w-none break-words leading-6 [overflow-wrap:anywhere] [&_code]:break-all [&_li]:break-words [&_p]:break-words [&_pre]:max-w-full [&_pre]:overflow-auto [&_table]:block [&_table]:max-w-full [&_table]:overflow-auto [&_td]:break-words [&_th]:break-words">
+                      <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+                        {markdownInput}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <div className="text-2xs text-text-muted">{t('devtools.markdown.empty')}</div>
+                  )}
                 </div>
               </div>
             </div>
@@ -307,13 +388,23 @@ export function DevWorkbench(): JSX.Element {
   )
 }
 
-function SubTabButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }): JSX.Element {
+function SubTabButton({
+  label,
+  active,
+  onClick
+}: {
+  label: string
+  active: boolean
+  onClick: () => void
+}): JSX.Element {
   return (
     <button
       onClick={onClick}
       className={clsx(
         'rounded px-2 py-1 text-xs transition-colors',
-        active ? 'bg-app-active text-white' : 'text-text-secondary hover:bg-app-hover hover:text-text-primary'
+        active
+          ? 'bg-app-active text-white'
+          : 'text-text-secondary hover:bg-app-hover hover:text-text-primary'
       )}
     >
       {label}

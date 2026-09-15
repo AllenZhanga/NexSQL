@@ -1,110 +1,82 @@
-﻿import { useState, useRef, useEffect } from 'react'
-import { Sparkles, Loader2, Settings } from 'lucide-react'
+import { useState } from 'react'
+import { Sparkles, ChevronDown, Settings, Loader2, ArrowUpRight } from 'lucide-react'
 import { useAIStore } from '@renderer/stores/aiStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
-import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { useUIStore } from '@renderer/stores/uiStore'
-import { clsx } from 'clsx'
 
 export function AIInputBar(): JSX.Element {
+  const [open, setOpen] = useState(false)
   const [question, setQuestion] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  const { isGenerating, generateSQL, loadConfig, config } = useAIStore()
-  const { tabs, activeTabId, updateTabSQL } = useQueryStore()
-  const { activeConnectionId, connections } = useConnectionStore()
-  const { setShowSettings } = useUIStore()
-
-  useEffect(() => {
-    loadConfig()
-  }, [])
-
-  const activeTab = tabs.find((t) => t.id === activeTabId)
-  const fallbackConnection = activeConnectionId
-    ? connections.find((item) => item.id === activeConnectionId && item.type !== 'redis')
-    : null
-  const connectionId = activeTab?.connectionId ?? fallbackConnection?.id
-
-  const isConfigured = config
-    ? config.provider === 'ollama'
-      ? !!(config.ollamaBaseUrl && config.ollamaModel)
-      : !!(config.apiKey)
-    : false
-
-  const handleGenerate = async (): Promise<void> => {
-    if (!question.trim() || !connectionId || isGenerating) return
-
+  const [error, setError] = useState('')
+  const { generateSQL, isGenerating, loadConfig } = useAIStore()
+  const { tabs, activeTabId, newTab, updateTabSQL, updateTabDatabase } = useQueryStore()
+  const tab = tabs.find((t) => t.id === activeTabId)
+  const generate = async (): Promise<void> => {
+    if (!question.trim() || !tab?.connectionId || isGenerating) return
+    const connectionId = tab.connectionId,
+      database = tab.selectedDatabase
+    setError('')
     try {
-      const sql = await generateSQL(
-        question.trim(),
-        connectionId,
-        activeTab?.selectedDatabase ?? undefined
-      )
-      if (activeTabId) {
-        updateTabSQL(activeTabId, sql)
-      }
+      await loadConfig()
+      const sql = await generateSQL(question.trim(), connectionId, database ?? undefined)
+      const id = newTab(connectionId)
+      updateTabDatabase(id, database)
+      updateTabSQL(id, sql)
       setQuestion('')
     } catch (err) {
-      console.error('AI 生成失败:', err)
+      setError(err instanceof Error ? err.message : String(err))
     }
   }
-
-  const handleKeyDown = (e: React.KeyboardEvent): void => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleGenerate()
-    }
-  }
-
   return (
-    <div className="border-b border-app-border bg-app-sidebar shrink-0">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <Sparkles size={13} className={clsx('shrink-0', isConfigured ? 'text-accent-blue' : 'text-text-muted')} />
-        <input
-          ref={inputRef}
-          type="text"
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            !isConfigured
-              ? '点击右侧 ⚙ 配置 AI...'
-              : !connectionId
-              ? '请先连接数据库...'
-              : '用自然语言描述查询需求，按 Enter 生成 SQL...'
-          }
-          className={clsx(
-            'flex-1 bg-app-input text-text-primary text-xs px-2.5 py-1.5 rounded border border-app-border',
-            'focus:outline-none focus:border-accent-blue placeholder:text-text-muted',
-            'selectable'
+    <section className="sql-assistant">
+      <button className="assistant-toggle" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <Sparkles size={13} />
+        <span>自然语言生成 SQL</span>
+        <ChevronDown size={12} style={{ transform: open ? 'rotate(180deg)' : undefined }} />
+      </button>
+      {open && (
+        <div className="assistant-body">
+          <div className="flex gap-2">
+            <input
+              aria-label="查询需求"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) void generate()
+              }}
+              placeholder="例如：查询最近 30 天每天的订单数"
+              className="flex-1 min-w-0 rounded-lg bg-app-input border border-app-border px-3 py-2 text-sm selectable"
+            />
+            <button
+              className="primary-button"
+              disabled={!question.trim() || !tab?.connectionId || isGenerating}
+              onClick={() => void generate()}
+            >
+              {isGenerating ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <ArrowUpRight size={14} />
+              )}
+              生成
+            </button>
+            <button
+              aria-label="配置 SQL 生成模型"
+              onClick={() => useUIStore.getState().setShowSettings(true)}
+              className="px-2 text-text-secondary"
+            >
+              <Settings size={15} />
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-text-muted">
+            向已配置的模型发送当前数据库结构和你的问题。生成结果在新标签中打开，由你审查后执行。
+          </p>
+          {error && (
+            <p role="alert" className="mt-2 text-xs text-accent-red">
+              {error}
+            </p>
           )}
-          disabled={isGenerating || !isConfigured || !connectionId}
-        />
-        <button
-          onClick={handleGenerate}
-          disabled={!question.trim() || !connectionId || isGenerating || !isConfigured}
-          className={clsx(
-            'flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded transition-colors shrink-0',
-            'bg-accent-blue text-white hover:bg-blue-600',
-            'disabled:opacity-40 disabled:cursor-not-allowed'
-          )}
-        >
-          {isGenerating ? (
-            <Loader2 size={12} className="animate-spin" />
-          ) : (
-            <Sparkles size={12} />
-          )}
-          生成
-        </button>
-        <button
-          onClick={() => setShowSettings(true)}
-          title="AI 设置"
-          className="p-1.5 rounded text-text-muted hover:text-text-primary hover:bg-app-hover transition-colors"
-        >
-          <Settings size={13} />
-        </button>
-      </div>
-    </div>
+        </div>
+      )}
+    </section>
   )
 }
-

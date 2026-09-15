@@ -1,10 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import {
-  useReactTable,
-  getCoreRowModel,
-  flexRender,
-  type ColumnDef
-} from '@tanstack/react-table'
+import { useReactTable, getCoreRowModel, flexRender, type ColumnDef } from '@tanstack/react-table'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useRef } from 'react'
 import { createPortal } from 'react-dom'
@@ -12,167 +7,136 @@ import { Download, AlertCircle, CheckCircle2, Clock, Copy } from 'lucide-react'
 import type { QueryResult } from '@shared/types/query'
 import { formatCellValue } from '@shared/utils'
 import { clsx } from 'clsx'
-import { useAIStore } from '@renderer/stores/aiStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
 
 interface ResultsPanelProps {
   result: QueryResult | null
   isLoading: boolean
 }
-
-export function ResultsPanel({ result, isLoading }: ResultsPanelProps): JSX.Element {
-  const [activeResultTab, setActiveResultTab] = useState<'results' | 'messages'>('results')
-  const { activeTabId } = useQueryStore()
-  const optimizeResult = useAIStore((state) => (activeTabId ? state.optimizeResults[activeTabId] : undefined))
-  const docResult = useAIStore((state) => state.docResult)
-  const isOptimizing = useAIStore((state) => state.isOptimizing)
-  const optimizeLogs = useAIStore((state) => state.logs.filter((log) => log.task === 'optimize').slice(0, 3))
-
+export function ResultsPanel({
+  result: fallbackResult,
+  isLoading
+}: ResultsPanelProps): JSX.Element {
+  const tab = useQueryStore((state) => state.tabs.find((t) => t.id === state.activeTabId))
+  const [selected, setSelected] = useState(0)
+  const [messages, setMessages] = useState(false)
+  const [now, setNow] = useState(Date.now())
+  const results = tab?.batch?.results ?? (fallbackResult ? [fallbackResult] : [])
   useEffect(() => {
-    if (optimizeResult || isOptimizing) {
-      setActiveResultTab('messages')
-    }
-  }, [optimizeResult, isOptimizing])
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full bg-app-bg text-text-muted">
-        <div className="flex items-center gap-2">
-          <div className="w-4 h-4 border-2 border-accent-blue border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm">执行中...</span>
-        </div>
-      </div>
-    )
-  }
-
-  if (!result) {
-    return (
-      <div className="flex items-center justify-center h-full bg-app-bg text-text-muted text-sm">
-        执行查询后结果显示在这里
-      </div>
-    )
-  }
-
-  const hasError = !!result.error
-  const hasRows = result.rows.length > 0
-
+    setSelected(0)
+    setMessages(false)
+  }, [tab?.id, tab?.executionId])
+  useEffect(() => {
+    if (!isLoading) return
+    const timer = setInterval(() => setNow(Date.now()), 250)
+    return () => clearInterval(timer)
+  }, [isLoading])
+  const result = results[Math.min(selected, results.length - 1)]
+  const seconds = Math.max(0, now - (tab?.startedAt ?? now)) / 1000
   return (
-    <div className="flex flex-col h-full bg-app-bg">
-      {/* Results toolbar */}
-      <div className="flex items-center justify-between px-3 py-1 bg-app-sidebar border-b border-app-border shrink-0">
-        <div className="flex items-center gap-3">
-          {/* Tab switcher */}
-          <div className="flex gap-1">
-            <button
-              onClick={() => setActiveResultTab('results')}
-              className={clsx(
-                'px-2 py-0.5 text-xs rounded transition-colors',
-                activeResultTab === 'results'
-                  ? 'bg-app-active text-white'
-                  : 'text-text-secondary hover:text-text-primary'
-              )}
-            >
-              结果
-            </button>
-            <button
-              onClick={() => setActiveResultTab('messages')}
-              className={clsx(
-                'px-2 py-0.5 text-xs rounded transition-colors',
-                activeResultTab === 'messages'
-                  ? 'bg-app-active text-white'
-                  : 'text-text-secondary hover:text-text-primary'
-              )}
-            >
-              消息
-            </button>
-          </div>
-
-          {/* Status */}
-          <div className="flex items-center gap-1.5 text-xs">
-            {hasError ? (
-              <><AlertCircle size={12} className="text-accent-red" /><span className="text-accent-red">错误</span></>
-            ) : (
-              <><CheckCircle2 size={12} className="text-accent-green" /><span className="text-accent-green">{result.rowCount} 行</span></>
-            )}
-            <Clock size={11} className="text-text-muted ml-2" />
-            <span className="text-text-muted">{result.durationMs}ms</span>
-          </div>
+    <div className="result-workspace flex flex-col h-full bg-app-bg">
+      <div className="result-toolbar">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="section-label">执行结果</span>
+          <span className="text-xs text-text-muted" role="status">
+            {isLoading
+              ? `执行中 · ${seconds.toFixed(1)}s`
+              : tab?.batch?.status === 'cancelled'
+                ? '已停止'
+                : tab?.batch?.status === 'failed' || tab?.error
+                  ? '执行失败'
+                  : results.length
+                    ? `${results.length} 个结果 · ${tab?.batch?.durationMs ?? result?.durationMs}ms`
+                    : '就绪'}
+          </span>
         </div>
-
-        {/* Export */}
-        {hasRows && (
+        {result?.rows.length ? (
           <button
             onClick={() => exportCSV(result)}
-            className="flex items-center gap-1 text-xs text-text-muted hover:text-text-primary transition-colors"
-            title="导出 CSV"
+            className="flex items-center gap-2 text-xs text-text-secondary"
           >
-            <Download size={12} />
-            导出 CSV
+            <Download size={13} />
+            导出当前结果
           </button>
-        )}
+        ) : null}
       </div>
-
-      {/* Content */}
-      <div className="flex-1 overflow-hidden selectable">
-        {activeResultTab === 'results' ? (
-          hasError ? (
-            <div className="p-4 text-accent-red text-sm font-mono">{result.error}</div>
-          ) : hasRows ? (
-            <DataTable result={result} />
+      {(tab?.error || tab?.batch?.warning || tab?.batch?.status === 'cancelled') && (
+        <div role="alert" className="execution-notice">
+          {tab.error ||
+            tab.batch?.warning ||
+            '已停止后续执行。取消不会撤销已经提交的语句，请核实写入结果。'}
+        </div>
+      )}
+      {results.length > 0 && (
+        <div className="result-tabs" role="tablist" aria-label="查询结果">
+          {results.map((item, index) => (
+            <button
+              key={index}
+              role="tab"
+              aria-selected={selected === index && !messages}
+              className={clsx('result-tab', selected === index && !messages && 'selected')}
+              onClick={() => {
+                setSelected(index)
+                setMessages(false)
+              }}
+            >
+              {item.error ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}
+              结果 {index + 1}
+              <span className="text-text-muted">{item.rowCount} 行</span>
+            </button>
+          ))}
+          <button
+            role="tab"
+            aria-selected={messages}
+            onClick={() => setMessages(true)}
+            className={clsx('result-tab', messages && 'selected')}
+          >
+            执行日志
+          </button>
+        </div>
+      )}
+      <div className="flex-1 min-h-0 overflow-hidden selectable">
+        {messages ? (
+          <div className="h-full overflow-auto p-4 space-y-4 text-xs">
+            {results.map((item, index) => (
+              <div key={index}>
+                <div className={item.error ? 'text-accent-red' : 'text-text-secondary'}>
+                  #{index + 1} · {item.error || `完成 · ${item.rowCount} 行 · ${item.durationMs}ms`}
+                </div>
+                <pre className="mt-2 whitespace-pre-wrap text-text-muted">{item.sql}</pre>
+              </div>
+            ))}
+          </div>
+        ) : result ? (
+          result.error ? (
+            <div className="p-5 text-accent-red text-sm whitespace-pre-wrap">{result.error}</div>
+          ) : result.columns.length ? (
+            <DataTable key={`${tab?.id}-${selected}-${tab?.executionId}`} result={result} />
           ) : (
-            <div className="p-4 text-text-muted text-sm">
-              执行成功，影响 {result.rowCount} 行。
+            <div className="empty-state">
+              <CheckCircle2 size={24} />
+              <h3>语句执行完成</h3>
+              <p>影响 {result.rowCount} 行</p>
             </div>
           )
         ) : (
-          <div className="h-full overflow-auto p-4 font-mono text-xs text-text-secondary">
-            <div>{result.error ?? `执行成功，影响 ${result.rowCount} 行 (${result.durationMs}ms)`}</div>
-            <div className="mt-2 text-text-muted whitespace-pre-wrap">{result.sql}</div>
-            {optimizeResult && (
-              <div className="mt-4 p-3 rounded border border-app-border bg-app-panel">
-                <div className="text-text-primary font-semibold mb-1">AI 优化诊断</div>
-                <div className="max-h-[420px] overflow-auto text-text-muted whitespace-pre-wrap">{optimizeResult.recommendations}</div>
-                {optimizeResult.semanticMatches.length > 0 && (
-                  <div className="mt-2 text-[11px] text-text-muted whitespace-pre-wrap">
-                    语义索引命中: {optimizeResult.semanticMatches.join(', ')}
-                  </div>
-                )}
-                <div className="mt-2 max-h-40 overflow-auto text-[11px] text-text-muted whitespace-pre-wrap">
-                  EXPLAIN: {optimizeResult.explainSQL}
-                </div>
-              </div>
-            )}
-            {isOptimizing && (
-              <div className="mt-4 p-3 rounded border border-app-border bg-app-panel">
-                <div className="text-text-primary font-semibold mb-1">AI 优化进行中</div>
-                <div className="space-y-1">
-                  {optimizeLogs.length === 0 ? (
-                    <div className="text-text-muted text-xs">正在准备优化任务...</div>
-                  ) : (
-                    optimizeLogs.map((log) => (
-                      <div key={log.id} className="text-xs text-text-muted">{log.message}</div>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-            {docResult && (
-              <div className="mt-4 p-3 rounded border border-app-border bg-app-panel">
-                <div className="flex items-center justify-between gap-2 mb-1">
-                  <div className="text-text-primary font-semibold">AI 数据字典</div>
-                  <button
-                    onClick={() => copyText(docResult.markdown)}
-                    className="text-xs text-text-muted hover:text-text-primary"
-                    title="复制 Markdown"
-                  >
-                    复制 Markdown
-                  </button>
-                </div>
-                <pre className="max-h-[420px] overflow-auto text-text-muted whitespace-pre-wrap overflow-x-auto">{docResult.markdown}</pre>
-              </div>
-            )}
+          <div className="empty-state">
+            <span className="empty-icon">
+              <Clock size={24} />
+            </span>
+            <h3>{isLoading ? '正在执行查询' : '从一个查询开始'}</h3>
+            <p>
+              {isLoading
+                ? '结果会按执行顺序显示，可随时停止本次执行。'
+                : '选中 SQL 后执行，或运行当前标签的全部语句。'}
+            </p>
+            <kbd>⌘ / Ctrl + Enter</kbd>
           </div>
         )}
+      </div>
+      <div className="result-footer">
+        {result ? `${result.columns.length} 列 · ${result.rowCount} 行` : '等待查询'}
+        <span>每次执行独立会话 · SQL Server 按 GO 分批</span>
       </div>
     </div>
   )
@@ -224,11 +188,9 @@ function DataTable({ result }: { result: QueryResult }): JSX.Element {
 
   const totalSize = virtualizer.getTotalSize()
   const virtualRows = virtualizer.getVirtualItems()
-  const paddingTop = virtualRows.length > 0 ? virtualRows[0]?.start ?? 0 : 0
+  const paddingTop = virtualRows.length > 0 ? (virtualRows[0]?.start ?? 0) : 0
   const paddingBottom =
-    virtualRows.length > 0
-      ? totalSize - (virtualRows[virtualRows.length - 1]?.end ?? 0)
-      : 0
+    virtualRows.length > 0 ? totalSize - (virtualRows[virtualRows.length - 1]?.end ?? 0) : 0
 
   return (
     <div ref={parentRef} className="h-full overflow-auto">
@@ -254,7 +216,9 @@ function DataTable({ result }: { result: QueryResult }): JSX.Element {
         </thead>
         <tbody>
           {paddingTop > 0 && (
-            <tr><td colSpan={columns.length + 1} style={{ height: `${paddingTop}px` }} /></tr>
+            <tr>
+              <td colSpan={columns.length + 1} style={{ height: `${paddingTop}px` }} />
+            </tr>
           )}
           {virtualRows.map((virtualRow) => {
             const row = rows[virtualRow.index]
@@ -294,59 +258,62 @@ function DataTable({ result }: { result: QueryResult }): JSX.Element {
             )
           })}
           {paddingBottom > 0 && (
-            <tr><td colSpan={columns.length + 1} style={{ height: `${paddingBottom}px` }} /></tr>
+            <tr>
+              <td colSpan={columns.length + 1} style={{ height: `${paddingBottom}px` }} />
+            </tr>
           )}
         </tbody>
       </table>
 
-      {cellMenu && createPortal(
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setCellMenu(null)}
-            onContextMenu={(e) => {
-              e.preventDefault()
-              setCellMenu(null)
-            }}
-          />
-          <div
-            className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[170px] text-xs"
-            style={{ top: cellMenu.y, left: cellMenu.x }}
-          >
-            <button
-              onClick={() => {
-                void copyText(cellMenu.cellValue ?? '')
+      {cellMenu &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={() => setCellMenu(null)}
+              onContextMenu={(e) => {
+                e.preventDefault()
                 setCellMenu(null)
               }}
-              className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+            />
+            <div
+              className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[170px] text-xs"
+              style={{ top: cellMenu.y, left: cellMenu.x }}
             >
-              <Copy size={12} />
-              复制单元格
-            </button>
-            <button
-              onClick={() => {
-                void copyText(rowToTsv(result.columns, cellMenu.row))
-                setCellMenu(null)
-              }}
-              className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
-            >
-              <Copy size={12} />
-              复制整行 (TSV)
-            </button>
-            <button
-              onClick={() => {
-                void copyText(JSON.stringify(cellMenu.row, null, 2))
-                setCellMenu(null)
-              }}
-              className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
-            >
-              <Copy size={12} />
-              复制整行 (JSON)
-            </button>
-          </div>
-        </>,
-        document.body
-      )}
+              <button
+                onClick={() => {
+                  void copyText(cellMenu.cellValue ?? '')
+                  setCellMenu(null)
+                }}
+                className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+              >
+                <Copy size={12} />
+                复制单元格
+              </button>
+              <button
+                onClick={() => {
+                  void copyText(rowToTsv(result.columns, cellMenu.row))
+                  setCellMenu(null)
+                }}
+                className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+              >
+                <Copy size={12} />
+                复制整行 (TSV)
+              </button>
+              <button
+                onClick={() => {
+                  void copyText(JSON.stringify(cellMenu.row, null, 2))
+                  setCellMenu(null)
+                }}
+                className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors"
+              >
+                <Copy size={12} />
+                复制整行 (JSON)
+              </button>
+            </div>
+          </>,
+          document.body
+        )}
     </div>
   )
 }
@@ -374,14 +341,16 @@ function estimateColumnWidth(name: string, rows: Record<string, unknown>[]): num
 function exportCSV(result: QueryResult): void {
   const headers = result.columns.map((c) => JSON.stringify(c.name)).join(',')
   const dataRows = result.rows.map((row) =>
-    result.columns.map((c) => {
-      const val = row[c.name]
-      if (val == null) return ''
-      const str = String(val)
-      return str.includes(',') || str.includes('"') || str.includes('\n')
-        ? JSON.stringify(str)
-        : str
-    }).join(',')
+    result.columns
+      .map((c) => {
+        const val = row[c.name]
+        if (val == null) return ''
+        const str = String(val)
+        return str.includes(',') || str.includes('"') || str.includes('\n')
+          ? JSON.stringify(str)
+          : str
+      })
+      .join(',')
   )
   const csv = [headers, ...dataRows].join('\n')
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })

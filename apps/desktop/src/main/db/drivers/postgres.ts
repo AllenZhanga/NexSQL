@@ -1,5 +1,11 @@
 import { Pool, PoolClient } from 'pg'
-import type { IDbDriver, DriverResult, DriverTableInfo, DriverColumnInfo, DriverIndexInfo } from '../types'
+import type {
+  IDbDriver,
+  DriverResult,
+  DriverTableInfo,
+  DriverColumnInfo,
+  DriverIndexInfo
+} from '../types'
 
 interface PgConfig {
   host: string
@@ -13,8 +19,11 @@ interface PgConfig {
 export class PostgresDriver implements IDbDriver {
   private pool: Pool
   private currentDatabase: string
+  private config: PgConfig
+  private databasePools = new Map<string, Pool>()
 
   constructor(config: PgConfig) {
+    this.config = config
     this.currentDatabase = config.database
     this.pool = new Pool({
       host: config.host,
@@ -31,18 +40,30 @@ export class PostgresDriver implements IDbDriver {
     })
   }
 
-  /**
-   * Acquires a client with the selected schema in search_path. The SET must
-   * happen on the SAME connection as the query: pool.query() picks any pooled
-   * connection, so a query could otherwise land on one with the wrong schema.
-   */
+  private databasePool(database = this.currentDatabase): Pool {
+    if (!database || database === this.config.database) return this.pool
+    let pool = this.databasePools.get(database)
+    if (!pool) {
+      pool = new Pool({
+        host: this.config.host,
+        port: this.config.port,
+        database,
+        user: this.config.user,
+        password: this.config.password,
+        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+        max: 5,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 15000
+      })
+      this.databasePools.set(database, pool)
+    }
+    return pool
+  }
+
   private async withScopedClient<T>(action: (client: PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect()
+    const pool = this.databasePool()
+    const client = await pool.connect()
     try {
-      if (this.currentDatabase) {
-        const schema = this.currentDatabase.replace(/"/g, '""')
-        await client.query(`SET search_path TO "${schema}"`)
-      }
       return await action(client)
     } finally {
       client.release()
@@ -97,8 +118,8 @@ export class PostgresDriver implements IDbDriver {
   }
 
   async getTables(database?: string): Promise<DriverTableInfo[]> {
-    const schema = database ?? 'public'
-    const result = await this.pool.query(
+    const schema = 'public'
+    const result = await this.databasePool(database).query(
       `SELECT table_name, table_type
        FROM information_schema.tables
        WHERE table_schema = $1
@@ -112,8 +133,8 @@ export class PostgresDriver implements IDbDriver {
   }
 
   async getColumns(table: string, database?: string): Promise<DriverColumnInfo[]> {
-    const schema = database ?? 'public'
-    const result = await this.pool.query(
+    const schema = 'public'
+    const result = await this.databasePool(database).query(
       `SELECT
          c.column_name,
          c.data_type,
@@ -145,14 +166,13 @@ export class PostgresDriver implements IDbDriver {
   }
 
   async useDatabase(database: string): Promise<void> {
-    // Only track the target schema here; the actual search_path SET is issued
-    // inside execute()/transaction() on the same connection that runs the query.
+    // Each target database has its own pool; never treat a database as search_path.
     this.currentDatabase = database
   }
 
   async getIndexes(table: string, database?: string): Promise<DriverIndexInfo[]> {
-    const schema = database ?? 'public'
-    const result = await this.pool.query(
+    const schema = 'public'
+    const result = await this.databasePool(database).query(
       `SELECT i.relname AS index_name, a.attname AS column_name,
               ix.indisunique AS is_unique, ix.indisprimary AS is_primary
        FROM pg_class t
@@ -168,7 +188,12 @@ export class PostgresDriver implements IDbDriver {
     for (const r of result.rows) {
       const name = r.index_name as string
       if (!map.has(name)) {
-        map.set(name, { name, columns: [], unique: r.is_unique as boolean, primary: r.is_primary as boolean })
+        map.set(name, {
+          name,
+          columns: [],
+          unique: r.is_unique as boolean,
+          primary: r.is_primary as boolean
+        })
       }
       map.get(name)!.columns.push(r.column_name as string)
     }
@@ -176,9 +201,9 @@ export class PostgresDriver implements IDbDriver {
   }
 
   async getTableDDL(table: string, database?: string): Promise<string> {
-    const schema = database ?? 'public'
+    const schema = 'public'
     // Build a CREATE TABLE statement from pg_catalog
-    const colRes = await this.pool.query(
+    const colRes = await this.databasePool(database).query(
       `SELECT column_name, data_type, character_maximum_length, is_nullable, column_default
        FROM information_schema.columns
        WHERE table_schema = $1 AND table_name = $2
@@ -196,6 +221,10 @@ export class PostgresDriver implements IDbDriver {
   }
 
   async disconnect(): Promise<void> {
-    await this.pool.end()
+    await Promise.all([
+      this.pool.end(),
+      ...Array.from(this.databasePools.values(), (pool) => pool.end())
+    ])
+    this.databasePools.clear()
   }
 }

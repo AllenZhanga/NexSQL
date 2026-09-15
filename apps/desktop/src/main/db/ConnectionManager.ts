@@ -2,7 +2,11 @@ import { app, safeStorage } from 'electron'
 import Database from 'better-sqlite3'
 import { join } from 'path'
 import { randomUUID } from 'crypto'
-import type { ConnectionConfig, ConnectionFormData, ConnectionTestResult } from '@shared/types/connection'
+import type {
+  ConnectionConfig,
+  ConnectionFormData,
+  ConnectionTestResult
+} from '@shared/types/connection'
 import { createDriver } from './drivers'
 import type { IDbDriver } from './types'
 
@@ -59,12 +63,18 @@ function initSchema(db: Database.Database): void {
     );
   `)
 
+  const historyColumns = db.pragma('table_info(query_history)') as { name: string }[]
+  if (!historyColumns.some((column) => column.name === 'database_name'))
+    db.exec('ALTER TABLE query_history ADD COLUMN database_name TEXT')
+
   // Migrations: add new columns if missing
   const cols = db.pragma('table_info(connections)') as { name: string }[]
   const colNames = cols.map((c) => c.name)
-  if (!colNames.includes('group_name')) db.exec(`ALTER TABLE connections ADD COLUMN group_name TEXT`)
+  if (!colNames.includes('group_name'))
+    db.exec(`ALTER TABLE connections ADD COLUMN group_name TEXT`)
   if (!colNames.includes('tags')) db.exec(`ALTER TABLE connections ADD COLUMN tags TEXT`)
-  if (!colNames.includes('ssh_config')) db.exec(`ALTER TABLE connections ADD COLUMN ssh_config TEXT`)
+  if (!colNames.includes('ssh_config'))
+    db.exec(`ALTER TABLE connections ADD COLUMN ssh_config TEXT`)
 }
 
 // Row type from internal DB
@@ -127,7 +137,9 @@ const activeConnections = new Map<string, IDbDriver>()
 
 const CONNECTION_TEST_TIMEOUT_MS = 10000
 
-function getConnectionTimeoutMessage(config: Pick<ConnectionConfig, 'type' | 'host' | 'ssl'>): string {
+function getConnectionTimeoutMessage(
+  config: Pick<ConnectionConfig, 'type' | 'host' | 'ssl'>
+): string {
   const host = config.host?.trim().toLowerCase() ?? ''
   if (config.type === 'redis' && host.endsWith('.aliyuncs.com')) {
     return '连接超时，请检查主机、端口、密码或 TLS 配置。阿里云 Redis 还需确认连接地址类型正确，并将当前客户端出口 IP 加入白名单；若实例为 VPC 地址，则需要在同一 VPC 内访问。'
@@ -156,18 +168,18 @@ export async function listConnections(): Promise<ConnectionConfig[]> {
   return rows.map(rowToConfig)
 }
 
-export async function addConnection(
-  formData: ConnectionFormData
-): Promise<ConnectionConfig> {
+export async function addConnection(formData: ConnectionFormData): Promise<ConnectionConfig> {
   const db = getInternalDb()
   const now = Date.now()
   const id = randomUUID()
   const passwordEncrypted = encryptPassword(formData.password ?? '')
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO connections (id, name, type, host, port, database_name, username, password_encrypted, ssl, file_path, group_name, tags, ssh_config, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `
+  ).run(
     id,
     formData.name,
     formData.type,
@@ -204,13 +216,15 @@ export async function updateConnection(
       ? encryptPassword(formData.password)
       : existing.password_encrypted
 
-  db.prepare(`
+  db.prepare(
+    `
     UPDATE connections SET
       name = ?, type = ?, host = ?, port = ?, database_name = ?,
       username = ?, password_encrypted = ?, ssl = ?, file_path = ?,
       group_name = ?, tags = ?, ssh_config = ?, updated_at = ?
     WHERE id = ?
-  `).run(
+  `
+  ).run(
     formData.name ?? existing.name,
     formData.type ?? existing.type,
     formData.host ?? existing.host,
@@ -220,9 +234,17 @@ export async function updateConnection(
     passwordEncrypted,
     formData.ssl !== undefined ? (formData.ssl ? 1 : 0) : existing.ssl,
     formData.filePath ?? existing.file_path,
-    formData.group !== undefined ? (formData.group || null) : existing.group_name,
-    formData.tags !== undefined ? (formData.tags ? JSON.stringify(formData.tags) : null) : existing.tags,
-    formData.ssh !== undefined ? (formData.ssh ? JSON.stringify(formData.ssh) : null) : existing.ssh_config,
+    formData.group !== undefined ? formData.group || null : existing.group_name,
+    formData.tags !== undefined
+      ? formData.tags
+        ? JSON.stringify(formData.tags)
+        : null
+      : existing.tags,
+    formData.ssh !== undefined
+      ? formData.ssh
+        ? JSON.stringify(formData.ssh)
+        : null
+      : existing.ssh_config,
     now,
     id
   )
@@ -322,7 +344,11 @@ export async function reconnectById(id: string): Promise<void> {
   // Tear down the stale driver first, ignoring any disconnect errors
   const stale = activeConnections.get(id)
   if (stale) {
-    try { await stale.disconnect() } catch { /* ignore */ }
+    try {
+      await stale.disconnect()
+    } catch {
+      /* ignore */
+    }
     activeConnections.delete(id)
   }
   await connectById(id)
@@ -351,7 +377,10 @@ export function getConnectionConfig(id: string): ConnectionConfig {
 
 export function getConnectionPassword(id: string): string {
   const db = getInternalDb()
-  const row = db.prepare('SELECT password_encrypted FROM connections WHERE id = ?').get(id) as Pick<ConnectionRow, 'password_encrypted'>
+  const row = db.prepare('SELECT password_encrypted FROM connections WHERE id = ?').get(id) as Pick<
+    ConnectionRow,
+    'password_encrypted'
+  >
   if (!row) return ''
   return decryptPassword(row.password_encrypted)
 }
@@ -362,15 +391,27 @@ export async function duplicateConnection(id: string): Promise<ConnectionConfig>
   if (!row) throw new Error(`Connection not found: ${id}`)
   const now = Date.now()
   const newId = randomUUID()
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO connections (id, name, type, host, port, database_name, username, password_encrypted, ssl, file_path, group_name, tags, ssh_config, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  `
+  ).run(
     newId,
     row.name + ' (副本)',
-    row.type, row.host, row.port, row.database_name,
-    row.username, row.password_encrypted, row.ssl, row.file_path,
-    row.group_name, row.tags, row.ssh_config, now, now
+    row.type,
+    row.host,
+    row.port,
+    row.database_name,
+    row.username,
+    row.password_encrypted,
+    row.ssl,
+    row.file_path,
+    row.group_name,
+    row.tags,
+    row.ssh_config,
+    now,
+    now
   )
   const newRow = db.prepare('SELECT * FROM connections WHERE id = ?').get(newId) as ConnectionRow
   return rowToConfig(newRow)

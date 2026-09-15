@@ -6,6 +6,14 @@ import autoprefixer from 'autoprefixer'
 
 export default defineConfig({
   main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          QueryWorker: resolve(__dirname, 'src/main/db/QueryWorker.ts')
+        }
+      }
+    },
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {
@@ -30,10 +38,7 @@ export default defineConfig({
     },
     css: {
       postcss: {
-        plugins: [
-          tailwindcss({ config: resolve(__dirname, 'tailwind.config.js') }),
-          autoprefixer()
-        ]
+        plugins: [tailwindcss({ config: resolve(__dirname, 'tailwind.config.js') }), autoprefixer()]
       }
     },
     plugins: [react()]

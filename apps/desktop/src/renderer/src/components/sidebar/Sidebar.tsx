@@ -8,7 +8,7 @@ import { clsx } from 'clsx'
 import type { QueryHistoryEntry } from '@shared/types/query'
 
 export function Sidebar(): JSX.Element {
-  const { sidebarTab, setSidebarTab, openConnectionDialog, setShowAppSettings, windowTab, setWindowTab } = useUIStore()
+  const { sidebarTab, setSidebarTab, openConnectionDialog, setShowAppSettings } = useUIStore()
   const { history, loadHistory } = useQueryStore()
   const { t } = useI18nStore()
 
@@ -25,7 +25,7 @@ export function Sidebar(): JSX.Element {
           <button
             onClick={() => setSidebarTab('connections')}
             className={clsx(
-              'p-1.5 rounded text-xs flex items-center gap-1 transition-colors',
+              'p-1.5 rounded text-xs flex items-center gap-1 transition-colors whitespace-nowrap shrink-0',
               sidebarTab === 'connections'
                 ? 'bg-app-active text-white'
                 : 'text-text-secondary hover:text-text-primary hover:bg-app-hover'
@@ -33,11 +33,12 @@ export function Sidebar(): JSX.Element {
             title={t('sidebar.connections')}
           >
             <Database size={14} />
+            <span>连接</span>
           </button>
           <button
             onClick={handleHistoryClick}
             className={clsx(
-              'p-1.5 rounded text-xs flex items-center gap-1 transition-colors',
+              'p-1.5 rounded text-xs flex items-center gap-1 transition-colors whitespace-nowrap shrink-0',
               sidebarTab === 'history'
                 ? 'bg-app-active text-white'
                 : 'text-text-secondary hover:text-text-primary hover:bg-app-hover'
@@ -45,6 +46,7 @@ export function Sidebar(): JSX.Element {
             title={t('sidebar.history')}
           >
             <History size={14} />
+            <span>历史</span>
           </button>
         </div>
         <div className="flex gap-1">
@@ -81,19 +83,16 @@ export function Sidebar(): JSX.Element {
 }
 
 function HistoryList({ history }: { history: QueryHistoryEntry[] }): JSX.Element {
-  const { newTab, updateTabSQL } = useQueryStore()
+  const { newTab, updateTabSQL, updateTabDatabase } = useQueryStore()
 
-  const handleClick = (sql: string): void => {
-    const tabId = newTab()
-    updateTabSQL(tabId, sql)
+  const handleClick = (entry: QueryHistoryEntry): void => {
+    const tabId = newTab(entry.connectionId)
+    updateTabSQL(tabId, entry.sql)
+    updateTabDatabase(tabId, entry.database ?? null)
   }
 
   if (history.length === 0) {
-    return (
-      <div className="p-4 text-text-muted text-xs text-center">
-        暂无查询记录
-      </div>
-    )
+    return <div className="p-4 text-text-muted text-xs text-center">暂无查询记录</div>
   }
 
   return (
@@ -104,7 +103,7 @@ function HistoryList({ history }: { history: QueryHistoryEntry[] }): JSX.Element
       {history.map((entry) => (
         <button
           key={entry.id}
-          onClick={() => handleClick(entry.sql)}
+          onClick={() => handleClick(entry)}
           className="w-full text-left px-3 py-1.5 hover:bg-app-hover transition-colors group"
         >
           <div className="flex items-center gap-2">

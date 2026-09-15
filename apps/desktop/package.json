@@ -15,7 +15,9 @@
     "preview": "electron-vite preview",
     "lint": "eslint . --ext .ts,.tsx",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
-    "postinstall": "electron-builder install-app-deps"
+    "postinstall": "electron-builder install-app-deps",
+    "test:sql": "electron-vite build && node --test tests/*.test.cjs",
+    "preview:ui": "node tests/preview.cjs"
   },
   "repository": {
     "type": "git",
