@@ -1,6 +1,11 @@
 import { Database, Wrench, TerminalSquare } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels'
+import { useEffect, useState, useRef } from 'react'
+import {
+  PanelGroup,
+  Panel,
+  PanelResizeHandle,
+  type ImperativePanelHandle
+} from 'react-resizable-panels'
 import { Sidebar } from '../sidebar/Sidebar'
 import { TabBar } from '../editor/TabBar'
 import { QueryEditor } from '../editor/QueryEditor'
@@ -21,6 +26,8 @@ import { DevWorkbench } from '../ai/DevWorkbench'
 import { clsx } from 'clsx'
 
 export function AppLayout(): JSX.Element {
+  const editorPanel = useRef<ImperativePanelHandle>(null)
+  const [resultsMaximized, setResultsMaximized] = useState(false)
   const [windowWidth, setWindowWidth] = useState(window.innerWidth)
   useEffect(() => {
     const resize = (): void => setWindowWidth(window.innerWidth)
@@ -157,7 +164,15 @@ export function AppLayout(): JSX.Element {
                 </div>
               ) : (
                 <PanelGroup direction="vertical" className="flex-1 overflow-hidden">
-                  <Panel defaultSize={55} minSize={20}>
+                  <Panel
+                    ref={editorPanel}
+                    defaultSize={55}
+                    minSize={20}
+                    collapsible
+                    collapsedSize={0}
+                    onCollapse={() => setResultsMaximized(true)}
+                    onExpand={() => setResultsMaximized(false)}
+                  >
                     <div className="flex flex-col h-full">
                       {/* AI input bar */}
                       <AIInputBar />
@@ -172,6 +187,11 @@ export function AppLayout(): JSX.Element {
 
                   <Panel defaultSize={45} minSize={15}>
                     <ResultsPanel
+                      maximized={resultsMaximized}
+                      onToggleMaximize={() => {
+                        if (editorPanel.current?.isCollapsed()) editorPanel.current.expand()
+                        else editorPanel.current?.collapse()
+                      }}
                       result={activeTab?.result ?? null}
                       isLoading={activeTab?.isLoading ?? false}
                     />

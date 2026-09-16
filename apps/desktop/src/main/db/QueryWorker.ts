@@ -254,8 +254,10 @@ process.once('message', (data) => {
         error,
         warning
       }
-      process.send?.({ type: 'done', result })
-      process.disconnect()
+      // Drain the final IPC payload before closing; large batches can still be queued.
+      process.send?.({ type: 'done', result }, () => {
+        if (process.connected) process.disconnect()
+      })
     }
   }
   void main()

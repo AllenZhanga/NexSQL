@@ -249,3 +249,24 @@ test('invalid timeout is rejected before starting an execution', async () => {
   const f = fixture()
   await assert.rejects(executeBatch(f.sender, 'bad-timeout', f.id, 'SELECT 1', 'main', -1), /超时/)
 })
+
+test('large result payload is delivered completely before worker disconnects', async () => {
+  const f = fixture()
+  const result = await f.run(
+    'WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<5000) SELECT x AS id, hex(zeroblob(100)) AS payload FROM n; SELECT 42 AS answer;'
+  )
+  assert.equal(result.status, 'completed', result.error)
+  assert.equal(result.results[0].rows.length, 5000)
+  assert.equal(result.results[0].rows[4999].id, 5000)
+  assert.equal(result.results[1].rows[0].answer, 42)
+})
+
+test('copied INSERT round-trips SQLite values', async () => {
+  const { insertStatements } = loadTS(path.join(root, 'src/renderer/src/components/results/resultData.ts'))
+  const f = fixture()
+  const rows = [["O'Reilly 中文\\path\nnext", null, '', new Uint8Array([0, 255])]]
+  const sql = insertStatements(['text', 'nullable', 'empty', 'bytes'], rows, 'copy test', '', 'sqlite')
+  const result = await f.run('CREATE TABLE "copy test" (text, nullable, empty, bytes);' + sql + ' SELECT text, nullable, empty, hex(bytes) AS bytes FROM "copy test";')
+  assert.equal(result.status, 'completed', result.error)
+  assert.deepEqual(result.results[2].rows, [{text: rows[0][0], nullable: null, empty: '', bytes: '00FF'}])
+})
