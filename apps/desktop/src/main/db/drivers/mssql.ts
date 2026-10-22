@@ -8,6 +8,7 @@ interface MSSQLConfig {
   user: string
   password: string
   ssl?: boolean
+  tlsServerName?: string
 }
 
 export class MSSQLDriver implements IDbDriver {
@@ -25,6 +26,7 @@ export class MSSQLDriver implements IDbDriver {
       password: config.password,
       options: {
         encrypt: config.ssl ?? true,
+        serverName: config.tlsServerName,
         trustServerCertificate: true,
         enableArithAbort: true
       },

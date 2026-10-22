@@ -14,6 +14,7 @@ interface PgConfig {
   user: string
   password: string
   ssl?: boolean
+  tlsServerName?: string
 }
 
 export class PostgresDriver implements IDbDriver {
@@ -31,7 +32,7 @@ export class PostgresDriver implements IDbDriver {
       database: config.database,
       user: config.user,
       password: config.password,
-      ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+      ssl: config.ssl ? { rejectUnauthorized: false, servername: config.tlsServerName } : undefined,
       max: 5,
       idleTimeoutMillis: 30000,
       // Send keepalive probes so the OS/server doesn't drop idle connections
@@ -50,7 +51,7 @@ export class PostgresDriver implements IDbDriver {
         database,
         user: this.config.user,
         password: this.config.password,
-        ssl: this.config.ssl ? { rejectUnauthorized: false } : undefined,
+        ssl: this.config.ssl ? { rejectUnauthorized: false, servername: this.config.tlsServerName } : undefined,
         max: 5,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 15000

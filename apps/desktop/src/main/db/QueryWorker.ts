@@ -2,6 +2,7 @@ import mysql from 'mysql2/promise'
 import { Client } from 'pg'
 import * as mssql from 'mssql'
 import Database from 'better-sqlite3'
+import { createConnection as createSocket } from 'node:net'
 import { splitSQL } from '@shared/sqlStatements'
 import type { ConnectionConfig } from '@shared/types/connection'
 import type { QueryResult, QueryBatchResult } from '@shared/types/query'
@@ -36,6 +37,7 @@ process.once('message', (data) => {
       statement: string
     ) => Promise<Array<Pick<QueryResult, 'columns' | 'rows' | 'rowCount'>>>
     let error: string | undefined
+    let failedStatements = 0
     let warning: string | undefined
     let transactionOpen = false
     try {
@@ -45,12 +47,17 @@ process.once('message', (data) => {
       const target = database || config.database
       if (config.type === 'mysql') {
         const options = {
-          host: config.host,
+          host: config.tlsServerName || config.host,
           port: config.port,
+          ...(config.tlsServerName
+            ? { stream: () => createSocket(config.port!, config.host!) }
+            : {}),
           user: config.username,
           password,
           database: target,
-          ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+          ssl: config.ssl
+            ? { rejectUnauthorized: false, servername: config.tlsServerName }
+            : undefined,
           connectTimeout: 15000
         }
         const conn = await mysql.createConnection(options)
@@ -105,7 +112,9 @@ process.once('message', (data) => {
           user: config.username,
           password,
           database: target,
-          ssl: config.ssl ? { rejectUnauthorized: false } : undefined,
+          ssl: config.ssl
+            ? { rejectUnauthorized: false, servername: config.tlsServerName }
+            : undefined,
           connectionTimeoutMillis: 15000
         }
         const client = new Client(options)
@@ -150,7 +159,11 @@ process.once('message', (data) => {
           password,
           database: target,
           requestTimeout: 0,
-          options: { encrypt: config.ssl ?? true, trustServerCertificate: true },
+          options: {
+            encrypt: config.ssl ?? true,
+            trustServerCertificate: true,
+            serverName: config.tlsServerName
+          },
           pool: { max: 1, min: 1 }
         }).connect()
         close = async () => {
@@ -222,22 +235,25 @@ process.once('message', (data) => {
             process.send?.({ type: 'progress', index, total: statements.length, result })
           }
         } catch (err) {
-          error = err instanceof Error ? err.message : String(err)
+          const statementError = err instanceof Error ? err.message : String(err)
+          failedStatements++
+          error = statementError
           const result: QueryResult = {
             columns: [],
             rows: [],
             rowCount: 0,
             durationMs: Date.now() - began,
             sql: statements[index],
-            error
+            error: statementError
           }
           results.push(result)
           process.send?.({ type: 'progress', index, total: statements.length, result })
-          break
         }
         // Yield between SQLite statements so pending cancellation can be observed.
         await new Promise<void>((resolve) => setImmediate(resolve))
       }
+      if (failedStatements && !cancelled)
+        error = `批量执行结束：${failedStatements} 条语句或批次失败。具体错误请查看对应结果或执行日志。`
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
@@ -249,6 +265,7 @@ process.once('message', (data) => {
       const result: QueryBatchResult = {
         results,
         totalStatements,
+        failedStatements,
         durationMs: Date.now() - start,
         status: cancelled ? 'cancelled' : error ? 'failed' : 'completed',
         error,

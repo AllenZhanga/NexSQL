@@ -30,10 +30,11 @@ const { executeBatch, cancelQuery } = loadTS(
   path.join(root, 'src/main/db/QueryRunner.ts'),
   {
     './ConnectionManager': {
-      getConnectionConfig: (id) => configs[id],
+      getConnectionRuntimeConfig: (id) => configs[id],
       getConnectionPassword: (id) => configs[id].password || ''
     },
     './QueryExecutor': { saveHistory: () => {} },
+    './SSHTunnel': { prepareConnection: async config => ({config, close() {}, getError: () => undefined}) },
     '@shared/sqlStatements': { splitSQL },
     'node:child_process': {
       fork: (file, args, options) => fork(file, args, { ...options, execPath: electron })
@@ -61,22 +62,59 @@ test('multiple statements preserve session and individual results', async () => 
   assert.equal(result.results[2].rows[0].v, 'a;b')
   assert.equal(result.results[3].rows[0].n, 42)
 })
-test('failure stops subsequent writes and preserves earlier results', async () => {
+test('failure preserves its error and continues subsequent writes and queries', async () => {
   const f = fixture()
   const result = await f.run(
-    'CREATE TABLE t(v); INSERT INTO t VALUES (1); SELECT * FROM missing; INSERT INTO t VALUES (2);'
+    'CREATE TABLE t(v); INSERT INTO t VALUES (1); SELECT * FROM missing; INSERT INTO t VALUES (2); SELECT * FROM t;'
   )
   assert.equal(result.status, 'failed')
-  assert.equal(result.results.length, 3)
+  assert.equal(result.results.length, 5)
+  assert.equal(result.failedStatements, 1)
+  assert.match(result.results[2].error, /missing/)
+  assert.deepEqual(result.results[4].rows, [{ v: 1 }, { v: 2 }])
   const check = await f.run('SELECT * FROM t;')
-  assert.deepEqual(check.results[0].rows, [{ v: 1 }])
+  assert.deepEqual(check.results[0].rows, [{ v: 1 }, { v: 2 }])
 })
-test('uncommitted transaction is rolled back on error', async () => {
+test('uncommitted transaction is rolled back after continuing past an error', async () => {
   const f = fixture()
   await f.run('CREATE TABLE t(v);')
-  await f.run('BEGIN; INSERT INTO t VALUES (1); SELECT * FROM missing; COMMIT;')
+  const result = await f.run(
+    'BEGIN; INSERT INTO t VALUES (1); SELECT * FROM missing; INSERT INTO t VALUES (2); SELECT * FROM t;'
+  )
+  assert.equal(result.status, 'failed')
+  assert.deepEqual(result.results.at(-1).rows, [{ v: 1 }, { v: 2 }])
+  assert.match(result.warning, /未提交事务/)
   const check = await f.run('SELECT COUNT(*) AS n FROM t;')
   assert.equal(check.results[0].rows[0].n, 0)
+})
+test('explicit COMMIT still executes after a SQLite statement error', async () => {
+  const f = fixture()
+  await f.run('CREATE TABLE t(v);')
+  const result = await f.run(
+    'BEGIN; INSERT INTO t VALUES (1); SELECT * FROM missing; COMMIT; SELECT * FROM t;'
+  )
+  assert.equal(result.results.length, 5)
+  assert.equal(result.status, 'failed')
+  assert.equal(result.warning, undefined)
+  assert.deepEqual((await f.run('SELECT * FROM t;')).results[0].rows, [{ v: 1 }])
+})
+test('multiple statement errors are each reported and later results still arrive', async () => {
+  const f = fixture(),
+    progress = []
+  f.sender.send = (_channel, p) => progress.push(p)
+  const result = await f.run(
+    'SELECT * FROM missing_one; SELECT 7 AS n; SELECT * FROM missing_two; SELECT 9 AS n;'
+  )
+  assert.equal(result.failedStatements, 2)
+  assert.equal(result.results.length, 4)
+  assert.match(result.results[0].error, /missing_one/)
+  assert.match(result.results[2].error, /missing_two/)
+  assert.equal(result.results[1].rows[0].n, 7)
+  assert.equal(result.results[3].rows[0].n, 9)
+  assert.deepEqual(
+    progress.map((p) => p.index),
+    [0, 1, 2, 3]
+  )
 })
 test('empty SELECT still returns column metadata and comments before SELECT work', async () => {
   const f = fixture()
@@ -154,16 +192,35 @@ for (const [dialect, env, username, slowSQL] of [
     return f
   }
   test(
-    `${dialect}: selected script session, multiple results, and stop on error`,
+    `${dialect}: selected script session and continuation after a statement error`,
     { skip: !port, timeout: 15000 },
     async () => {
       const f = remote()
       const result = await f.run(
-        'CREATE TEMPORARY TABLE t(v INT); INSERT INTO t VALUES (1); SELECT * FROM t; SELECT * FROM missing_table; INSERT INTO t VALUES(2);'
+        'CREATE TEMPORARY TABLE t(v INT); INSERT INTO t VALUES (1); SELECT * FROM t; SELECT * FROM missing_table; INSERT INTO t VALUES(2); SELECT * FROM t ORDER BY v;'
       )
       assert.equal(result.status, 'failed')
-      assert.equal(result.results.length, 4)
+      assert.equal(result.results.length, 6)
+      assert.equal(result.failedStatements, 1)
+      assert.match(result.results[3].error, /missing_table/)
       assert.equal(result.results[2].rows[0].v, 1)
+      assert.deepEqual(result.results[5].rows, [{ v: 1 }, { v: 2 }])
+    }
+  )
+  test(
+    `${dialect}: transaction recovery statements still run after an error`,
+    { skip: !port, timeout: 15000 },
+    async () => {
+      const f = remote()
+      const result = await f.run(
+        'BEGIN; SELECT * FROM missing_table; SELECT 7 AS n; ROLLBACK; SELECT 9 AS n;'
+      )
+      assert.equal(result.status, 'failed')
+      assert.equal(result.results.length, 5)
+      assert.equal(result.failedStatements, dialect === 'postgresql' ? 2 : 1)
+      assert.equal(result.results[3].error, undefined)
+      assert.equal(result.results[4].rows[0].n, 9)
+      assert.equal(result.warning, undefined)
     }
   )
   test(
@@ -176,7 +233,12 @@ for (const [dialect, env, username, slowSQL] of [
       f.sender.send = (_channel, p) => {
         if (p.index === 0) timer = setTimeout(() => cancelQuery(id, f.sender.id), 200)
       }
-      const result = await executeBatch(f.sender, id, f.id, `SELECT 1; ${slowSQL}; SELECT 99;`)
+      const result = await executeBatch(
+        f.sender,
+        id,
+        f.id,
+        `SELECT * FROM missing_table; ${slowSQL}; SELECT 99;`
+      )
       clearTimeout(timer)
       assert.equal(result.status, 'cancelled')
       assert.ok(result.durationMs < 10000)
@@ -262,11 +324,56 @@ test('large result payload is delivered completely before worker disconnects', a
 })
 
 test('copied INSERT round-trips SQLite values', async () => {
-  const { insertStatements } = loadTS(path.join(root, 'src/renderer/src/components/results/resultData.ts'))
+  const { insertStatements } = loadTS(
+    path.join(root, 'src/renderer/src/components/results/resultData.ts')
+  )
   const f = fixture()
   const rows = [["O'Reilly 中文\\path\nnext", null, '', new Uint8Array([0, 255])]]
-  const sql = insertStatements(['text', 'nullable', 'empty', 'bytes'], rows, 'copy test', '', 'sqlite')
-  const result = await f.run('CREATE TABLE "copy test" (text, nullable, empty, bytes);' + sql + ' SELECT text, nullable, empty, hex(bytes) AS bytes FROM "copy test";')
+  const sql = insertStatements(
+    ['text', 'nullable', 'empty', 'bytes'],
+    rows,
+    'copy test',
+    '',
+    'sqlite'
+  )
+  const result = await f.run(
+    'CREATE TABLE "copy test" (text, nullable, empty, bytes);' +
+      sql +
+      ' SELECT text, nullable, empty, hex(bytes) AS bytes FROM "copy test";'
+  )
   assert.equal(result.status, 'completed', result.error)
-  assert.deepEqual(result.results[2].rows, [{text: rows[0][0], nullable: null, empty: '', bytes: '00FF'}])
+  assert.deepEqual(result.results[2].rows, [
+    { text: rows[0][0], nullable: null, empty: '', bytes: '00FF' }
+  ])
+})
+
+test('export SQL round-trips table DDL, text, NULL, boolean and binary in a single import session', async () => {
+  const utils = loadTS(path.join(root, '../../packages/shared/src/utils.ts'))
+  const { buildExportInsert, terminateDDL } = loadTS(
+    path.join(root, '../../packages/shared/src/sqlExport.ts'),
+    { './utils': utils }
+  )
+  const f = fixture()
+  const row = {
+    id: 1,
+    text: "O'Reilly\n中文\\path",
+    empty: '',
+    nullable: null,
+    flag: true,
+    bytes: new Uint8Array([0, 255])
+  }
+  const sql =
+    terminateDDL(
+      'CREATE TABLE records (id INTEGER PRIMARY KEY, text TEXT, empty TEXT, nullable TEXT, flag INTEGER, bytes BLOB)'
+    ) +
+    '\n' +
+    buildExportInsert('sqlite', 'records', Object.keys(row), row)
+  const imported = await f.run(sql + '; SELECT *, hex(bytes) AS hex FROM records;')
+  assert.equal(imported.status, 'completed', imported.error)
+  const actual = imported.results.at(-1).rows[0]
+  assert.equal(actual.text, row.text)
+  assert.equal(actual.nullable, null)
+  assert.equal(actual.empty, '')
+  assert.equal(actual.flag, 1)
+  assert.equal(actual.hex, '00FF')
 })

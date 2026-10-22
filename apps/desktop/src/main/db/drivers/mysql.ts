@@ -1,4 +1,5 @@
 import mysql, { type Pool, type PoolConnection, type RowDataPacket, type OkPacket } from 'mysql2/promise'
+import { createConnection } from 'node:net'
 import type { IDbDriver, DriverResult, DriverTableInfo, DriverColumnInfo, DriverIndexInfo } from '../types'
 
 interface MySQLConfig {
@@ -8,6 +9,7 @@ interface MySQLConfig {
   user: string
   password: string
   ssl?: boolean
+  tlsServerName?: string
 }
 
 export class MySQLDriver implements IDbDriver {
@@ -17,8 +19,9 @@ export class MySQLDriver implements IDbDriver {
   constructor(config: MySQLConfig) {
     this.currentDatabase = config.database
     this.pool = mysql.createPool({
-      host: config.host,
+      host: config.tlsServerName || config.host,
       port: config.port,
+      ...(config.tlsServerName ? { stream: () => createConnection(config.port, config.host) } : {}),
       database: config.database,
       user: config.user,
       password: config.password,

@@ -10,7 +10,7 @@ import type {
   SchemaTable,
   SchemaColumn
 } from '@shared/types/query'
-import { sqlLiteral } from '@shared/utils'
+import { buildExportInsert, terminateDDL } from '@shared/sqlExport'
 import { getDriver, getConnectionConfig, reconnectById } from './ConnectionManager'
 import { driverResultToQueryResult } from './types'
 
@@ -133,38 +133,13 @@ export async function getSchema(connectionId: string, database?: string): Promis
       }
     }
 
-    // When database is not explicitly specified, enumerate ALL databases
-    // (do NOT fall back to config.database, otherwise users with a configured
-    // default DB would only ever see that one schema)
-    const targetDb = database ?? ''
-
-    // If no specific database is specified, enumerate all databases and load their tables
-    if (!targetDb) {
-      let dbNames: string[] = []
-      try {
-        dbNames = await driver.getDatabases()
-      } catch {
-        // fallback: try empty string
-        dbNames = ['']
-      }
-
-      const databases: DatabaseInfo[] = await Promise.all(
-        dbNames.map(async (dbName) => {
-          try {
-            const tables = await driver.getTables(dbName)
-            return {
-              name: dbName,
-              tables: tables.map((t) => ({ name: t.name, type: t.type, columns: [] }))
-            } as DatabaseInfo
-          } catch {
-            return { name: dbName, tables: [] } as DatabaseInfo
-          }
-        })
-      )
-      return { connectionId, databases }
+    // Listing a connection must never fan out table queries across every database.
+    if (database === undefined) {
+      const names = await driver.getDatabases()
+      return { connectionId, databases: names.map(name => ({ name, tables: [], tablesLoaded: false })) }
     }
 
-    const tables = await driver.getTables(targetDb)
+    const tables = await driver.getTables(database)
 
     // Lazy: only return table list without columns for speed
     const tableList: SchemaTable[] = tables.map((t) => ({
@@ -174,8 +149,9 @@ export async function getSchema(connectionId: string, database?: string): Promis
     }))
 
     const dbInfo: DatabaseInfo = {
-      name: targetDb,
-      tables: tableList
+      name: database,
+      tables: tableList,
+      tablesLoaded: true
     }
 
     return {
@@ -246,8 +222,11 @@ export async function exportTableSQL(
     if (config.type === 'redis') throw new Error('Redis does not support table SQL export')
     const targetDb = database ?? config.database ?? ''
 
-    const ddl = await driver.getTableDDL(table, targetDb)
-    const dataResult = await driver.execute(buildSelectAllSQL(config.type, table))
+    const ddl = terminateDDL(await driver.getTableDDL(table, targetDb))
+    const tables = await driver.getTables(targetDb)
+    if (tables.find((item) => item.name === table)?.type === 'view') return ddl
+    if (targetDb) await driver.useDatabase(targetDb)
+    const dataResult = await driver.execute(buildSelectAllSQL(config.type, table, targetDb))
     const rows = dataResult.rows
 
     if (rows.length === 0) return ddl + '\n-- No data'
@@ -268,15 +247,16 @@ function quoteIdentifierByType(
   return escapeMySQLIdentifier(name)
 }
 
-function toSqlLiteral(value: unknown, engine: string): string {
-  return sqlLiteral(value, engine)
-}
-
 function buildSelectAllSQL(
   type: 'mysql' | 'postgresql' | 'mssql' | 'sqlite' | 'redis',
-  table: string
+  table: string,
+  database?: string
 ): string {
   const ident = quoteIdentifierByType(type, table)
+  if (database && type === 'mysql')
+    return `SELECT * FROM ${quoteIdentifierByType(type, database)}.${ident}`
+  if (database && type === 'mssql')
+    return `SELECT * FROM ${quoteIdentifierByType(type, database)}..${ident}`
   return `SELECT * FROM ${ident}`
 }
 
@@ -286,91 +266,7 @@ function buildInsertSQL(
   columns: string[],
   row: Record<string, unknown>
 ): string {
-  const tableIdent = quoteIdentifierByType(type, table)
-  const cols = columns.map((col) => quoteIdentifierByType(type, col)).join(', ')
-  const values = columns.map((col) => toSqlLiteral(row[col], type)).join(', ')
-  return `INSERT INTO ${tableIdent} (${cols}) VALUES (${values});`
-}
-
-function splitSqlStatements(sql: string): string[] {
-  const statements: string[] = []
-  let current = ''
-  let inSingle = false
-  let inDouble = false
-  let inBacktick = false
-  let inLineComment = false
-  let inBlockComment = false
-
-  for (let index = 0; index < sql.length; index++) {
-    const char = sql[index]
-    const next = sql[index + 1] ?? ''
-
-    if (inLineComment) {
-      if (char === '\n') {
-        inLineComment = false
-        current += char
-      }
-      continue
-    }
-
-    if (inBlockComment) {
-      if (char === '*' && next === '/') {
-        inBlockComment = false
-        index++
-      }
-      continue
-    }
-
-    if (!inSingle && !inDouble && !inBacktick) {
-      if (char === '-' && next === '-') {
-        inLineComment = true
-        index++
-        continue
-      }
-      if (char === '#') {
-        inLineComment = true
-        continue
-      }
-      if (char === '/' && next === '*') {
-        inBlockComment = true
-        index++
-        continue
-      }
-    }
-
-    if (char === "'" && !inDouble && !inBacktick) {
-      const escaped = sql[index - 1] === '\\'
-      if (!escaped) inSingle = !inSingle
-      current += char
-      continue
-    }
-
-    if (char === '"' && !inSingle && !inBacktick) {
-      const escaped = sql[index - 1] === '\\'
-      if (!escaped) inDouble = !inDouble
-      current += char
-      continue
-    }
-
-    if (char === '`' && !inSingle && !inDouble) {
-      inBacktick = !inBacktick
-      current += char
-      continue
-    }
-
-    if (char === ';' && !inSingle && !inDouble && !inBacktick) {
-      const statement = current.trim()
-      if (statement) statements.push(statement)
-      current = ''
-      continue
-    }
-
-    current += char
-  }
-
-  const tail = current.trim()
-  if (tail) statements.push(tail)
-  return statements.filter((statement) => !/^DELIMITER\b/i.test(statement.trim()))
+  return buildExportInsert(type, table, columns, row)
 }
 
 export async function exportDatabaseSQL(connectionId: string, database?: string): Promise<string> {
@@ -407,10 +303,11 @@ export async function exportDatabaseSQL(connectionId: string, database?: string)
     for (const table of tables) {
       const ddl = await driver.getTableDDL(table.name, targetDb)
       chunks.push(`-- ${table.type.toUpperCase()}: ${table.name}`)
-      chunks.push(ddl.endsWith(';') ? ddl : `${ddl};`)
+      chunks.push(terminateDDL(ddl))
 
       if (table.type === 'table') {
-        const dataResult = await driver.execute(buildSelectAllSQL(dbType, table.name))
+        if (targetDb) await driver.useDatabase(targetDb)
+        const dataResult = await driver.execute(buildSelectAllSQL(dbType, table.name, targetDb))
         if (dataResult.rows.length > 0) {
           const columnNames = dataResult.columns.map((column) => column.name)
           for (const row of dataResult.rows) {
@@ -423,32 +320,6 @@ export async function exportDatabaseSQL(connectionId: string, database?: string)
     }
 
     return chunks.join('\n')
-  })
-}
-
-export async function importDatabaseSQL(
-  connectionId: string,
-  sql: string,
-  database?: string
-): Promise<number> {
-  return runWithReconnect(connectionId, async () => {
-    const driver = getDriver(connectionId)
-    const config = getConnectionConfig(connectionId)
-    const targetDb = database ?? config.database ?? ''
-    if (config.type === 'redis') throw new Error('Redis does not support SQL import')
-    const statements = splitSqlStatements(sql)
-
-    if (statements.length === 0) return 0
-
-    if (targetDb) {
-      await driver.useDatabase(targetDb)
-    }
-
-    for (const statement of statements) {
-      await driver.execute(statement)
-    }
-
-    return statements.length
   })
 }
 

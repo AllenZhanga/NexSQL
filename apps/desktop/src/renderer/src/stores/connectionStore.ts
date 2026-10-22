@@ -1,5 +1,10 @@
+import { useQueryStore } from './queryStore'
 import { create } from 'zustand'
-import type { ConnectionConfig, ConnectionFormData, ConnectionStatus } from '@shared/types/connection'
+import type {
+  ConnectionConfig,
+  ConnectionFormData,
+  ConnectionStatus
+} from '@shared/types/connection'
 
 interface ConnectionState {
   connections: ConnectionConfig[]
@@ -37,18 +42,19 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
 
   updateConnection: async (id, formData) => {
     const updated = await window.db!.updateConnection(id, formData)
+    useQueryStore.getState().clearSchema(id)
     set((state) => ({
-      connections: state.connections.map((c) => (c.id === id ? updated : c))
+      connections: state.connections.map((c) => (c.id === id ? updated : c)),
+      statuses: { ...state.statuses, [id]: 'disconnected' }
     }))
   },
 
   deleteConnection: async (id) => {
     await window.db!.deleteConnection(id)
+    useQueryStore.getState().clearSchema(id)
     set((state) => ({
       connections: state.connections.filter((c) => c.id !== id),
-      statuses: Object.fromEntries(
-        Object.entries(state.statuses).filter(([k]) => k !== id)
-      ),
+      statuses: Object.fromEntries(Object.entries(state.statuses).filter(([k]) => k !== id)),
       activeConnectionId: state.activeConnectionId === id ? null : state.activeConnectionId
     }))
   },
@@ -60,6 +66,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   },
 
   connect: async (id) => {
+    useQueryStore.getState().clearSchema(id)
     set((state) => ({ statuses: { ...state.statuses, [id]: 'connecting' } }))
     try {
       await window.db!.connect(id)
@@ -74,6 +81,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => ({
   },
 
   disconnect: async (id) => {
+    useQueryStore.getState().clearSchema(id)
     await window.db!.disconnect(id)
     set((state) => ({
       statuses: { ...state.statuses, [id]: 'disconnected' },

@@ -5,10 +5,11 @@ import { PostgresDriver } from './postgres'
 import { MSSQLDriver } from './mssql'
 import { SQLiteDriver } from './sqlite'
 import { RedisDriver } from './redis'
+import { createSSHDriver } from './SSHDriver'
 
 export function createDriver(config: ConnectionConfig, password: string): IDbDriver {
   if (config.ssh) {
-    throw new Error('当前版本尚未实现 SSH 隧道连接。请直接连接目标地址，或先自行建立本地端口转发后再连接 127.0.0.1:本地端口。')
+    return createSSHDriver(config, direct => createDriver(direct, password))
   }
 
   switch (config.type) {
@@ -19,7 +20,8 @@ export function createDriver(config: ConnectionConfig, password: string): IDbDri
         database: config.database ?? '',
         user: config.username ?? '',
         password,
-        ssl: config.ssl
+        ssl: config.ssl,
+        tlsServerName: config.tlsServerName
       })
 
     case 'postgresql':
@@ -29,7 +31,8 @@ export function createDriver(config: ConnectionConfig, password: string): IDbDri
         database: config.database ?? '',
         user: config.username ?? '',
         password,
-        ssl: config.ssl
+        ssl: config.ssl,
+        tlsServerName: config.tlsServerName
       })
 
     case 'mssql':
@@ -39,7 +42,8 @@ export function createDriver(config: ConnectionConfig, password: string): IDbDri
         database: config.database ?? '',
         user: config.username ?? '',
         password,
-        ssl: config.ssl
+        ssl: config.ssl,
+        tlsServerName: config.tlsServerName
       })
 
     case 'sqlite':
@@ -54,7 +58,8 @@ export function createDriver(config: ConnectionConfig, password: string): IDbDri
         database: config.database ?? '0',
         user: config.username ?? '',
         password,
-        ssl: config.ssl
+        ssl: config.ssl,
+        tlsServerName: config.tlsServerName
       })
 
     default:

@@ -25,6 +25,19 @@ function createWindow(): void {
     }
   })
 
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (
+      input.type === 'keyDown' &&
+      (input.meta || input.control) &&
+      !input.shift &&
+      !input.alt &&
+      input.key.toLowerCase() === 'r'
+    ) {
+      event.preventDefault()
+      if (!input.isAutoRepeat) mainWindow?.webContents.send('ui:refreshData')
+    }
+  })
+
   mainWindow.on('ready-to-show', () => {
     mainWindow!.show()
   })

@@ -5,6 +5,13 @@ import { useUIStore } from '@renderer/stores/uiStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
 import { useI18nStore } from '@renderer/stores/i18nStore'
 import { clsx } from 'clsx'
+import { useEffect, useRef, useState } from 'react'
+import {
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+  type ImperativePanelHandle
+} from 'react-resizable-panels'
 import type { QueryHistoryEntry } from '@shared/types/query'
 
 export function Sidebar(): JSX.Element {
@@ -68,16 +75,62 @@ export function Sidebar(): JSX.Element {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+      <div className="flex-1 min-h-0 overflow-hidden">
         {sidebarTab === 'connections' ? (
-          <>
-            <ConnectionList />
-            <SchemaTree />
-          </>
+          <ConnectionPanels />
         ) : (
-          <HistoryList history={history} />
+          <div className="h-full overflow-y-auto overflow-x-hidden">
+            <HistoryList history={history} />
+          </div>
         )}
       </div>
+    </div>
+  )
+}
+
+function ConnectionPanels(): JSX.Element {
+  const root = useRef<HTMLDivElement>(null)
+  const connectionsPanel = useRef<ImperativePanelHandle>(null)
+  const [height, setHeight] = useState(540)
+  const { t } = useI18nStore()
+  useEffect(() => {
+    const observer = new ResizeObserver(([entry]) =>
+      setHeight(Math.max(1, entry.contentRect.height))
+    )
+    if (root.current) observer.observe(root.current)
+    return () => observer.disconnect()
+  }, [])
+  return (
+    <div ref={root} className="h-full min-h-0" data-testid="sidebar-panels">
+      <PanelGroup
+        direction="vertical"
+        autoSaveId="nexsql-sidebar-layout"
+        id="sidebar-connections-layout"
+      >
+        <Panel
+          ref={connectionsPanel}
+          id="connection-list-panel"
+          order={1}
+          defaultSize={35}
+          minSize={Math.min(45, (140 / height) * 100)}
+        >
+          <ConnectionList />
+        </Panel>
+        <PanelResizeHandle
+          className="sidebar-resize-handle"
+          aria-label={t('sidebar.resize')}
+          title={t('sidebar.resizeHint')}
+          onDoubleClick={() => connectionsPanel.current?.resize(35)}
+        />
+        <Panel
+          id="database-tree-panel"
+          order={2}
+          defaultSize={65}
+          minSize={Math.min(45, (180 / height) * 100)}
+        >
+          <SchemaTree />
+        </Panel>
+      </PanelGroup>
     </div>
   )
 }

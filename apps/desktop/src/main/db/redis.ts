@@ -1,13 +1,12 @@
 import type { RedisKeyDetail, RedisKeyPage, RedisKeyUpdateRequest } from '@shared/types/redis'
-import { getDriver } from './ConnectionManager'
-import { RedisDriver } from './drivers/redis'
+import { getDriver, getConnectionConfig } from './ConnectionManager'
+import type { RedisDriver } from './drivers/redis'
 
 function getRedisDriver(connectionId: string): RedisDriver {
-  const driver = getDriver(connectionId)
-  if (!(driver instanceof RedisDriver)) {
+  if (getConnectionConfig(connectionId).type !== 'redis') {
     throw new Error('Current connection is not Redis')
   }
-  return driver
+  return getDriver(connectionId) as RedisDriver
 }
 
 export async function getRedisKeys(

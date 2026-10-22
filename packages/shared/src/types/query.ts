@@ -46,6 +46,7 @@ export interface SchemaTable {
 export interface DatabaseInfo {
   name: string
   tables: SchemaTable[]
+  tablesLoaded?: boolean
 }
 
 export interface DatabaseSchema {
@@ -56,6 +57,7 @@ export interface DatabaseSchema {
 export interface QueryBatchResult {
   results: QueryResult[]
   totalStatements: number
+  failedStatements?: number
   durationMs: number
   warning?: string
   status: 'completed' | 'failed' | 'cancelled'

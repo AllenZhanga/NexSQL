@@ -7,8 +7,12 @@ import type {
   ConnectionFormData,
   ConnectionTestResult
 } from '@shared/types/connection'
+import type { SSHConfig } from '@shared/types/connection'
+import { validateSSHConfig, sshAuthMethod } from '@shared/ssh'
 import { createDriver } from './drivers'
 import type { IDbDriver } from './types'
+import { parseConnectionImport } from './ConnectionImport'
+import type { ConnectionImportPreview } from '@shared/types/connectionImport'
 
 let internalDb: Database.Database | null = null
 
@@ -75,6 +79,16 @@ function initSchema(db: Database.Database): void {
   if (!colNames.includes('tags')) db.exec(`ALTER TABLE connections ADD COLUMN tags TEXT`)
   if (!colNames.includes('ssh_config'))
     db.exec(`ALTER TABLE connections ADD COLUMN ssh_config TEXT`)
+  for (const row of db
+    .prepare('SELECT id, ssh_config FROM connections WHERE ssh_config IS NOT NULL')
+    .all() as { id: string; ssh_config: string }[]) {
+    const ssh = JSON.parse(row.ssh_config) as SSHConfig
+    if (ssh.password || ssh.passphrase)
+      db.prepare('UPDATE connections SET ssh_config = ? WHERE id = ?').run(
+        serializeSSH(ssh, row.ssh_config, false),
+        row.id
+      )
+  }
 }
 
 // Row type from internal DB
@@ -109,7 +123,7 @@ function rowToConfig(row: ConnectionRow): ConnectionConfig {
     filePath: row.file_path ?? undefined,
     group: row.group_name ?? undefined,
     tags: row.tags ? JSON.parse(row.tags) : undefined,
-    ssh: row.ssh_config ? JSON.parse(row.ssh_config) : undefined,
+    ssh: publicSSH(row.ssh_config),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -132,8 +146,72 @@ function decryptPassword(encrypted: Buffer | null): string {
   return Buffer.from(encrypted.toString(), 'base64').toString()
 }
 
+interface StoredSSH extends Omit<SSHConfig, 'password' | 'passphrase'> {
+  password?: string // legacy migration only
+  passphrase?: string
+  passwordEncrypted?: string
+  passphraseEncrypted?: string
+}
+
+function publicSSH(raw: string | null): SSHConfig | undefined {
+  if (!raw) return undefined
+  const ssh = JSON.parse(raw) as StoredSSH
+  return {
+    host: ssh.host,
+    port: ssh.port,
+    username: ssh.username,
+    authMethod: sshAuthMethod(ssh),
+    privateKeyPath: ssh.privateKeyPath,
+    hasPassword: !!(ssh.passwordEncrypted || ssh.password),
+    hasPassphrase: !!(ssh.passphraseEncrypted || ssh.passphrase)
+  }
+}
+
+function runtimeSSH(raw: string | null): SSHConfig | undefined {
+  const config = publicSSH(raw)
+  if (!config || !raw) return undefined
+  const stored = JSON.parse(raw) as StoredSSH
+  return {
+    ...config,
+    password: stored.passwordEncrypted
+      ? decryptPassword(Buffer.from(stored.passwordEncrypted, 'base64'))
+      : stored.password,
+    passphrase: stored.passphraseEncrypted
+      ? decryptPassword(Buffer.from(stored.passphraseEncrypted, 'base64'))
+      : stored.passphrase
+  }
+}
+
+function serializeSSH(
+  ssh: SSHConfig | null | undefined,
+  previous?: string | null,
+  validate = true
+): string | null {
+  if (!ssh) return null
+  if (validate) validateSSHConfig(ssh)
+  const old = previous ? (JSON.parse(previous) as StoredSSH) : undefined
+  const secret = (key: 'password' | 'passphrase'): string | undefined => {
+    const encryptedKey = key === 'password' ? 'passwordEncrypted' : 'passphraseEncrypted'
+    return ssh[key]
+      ? encryptPassword(ssh[key]!)?.toString('base64')
+      : (old?.[encryptedKey] ??
+          (old?.[key] ? encryptPassword(old[key]!)?.toString('base64') : undefined))
+  }
+  const authMethod = sshAuthMethod(ssh)
+  return JSON.stringify({
+    host: ssh.host?.trim() ?? '',
+    port: ssh.port,
+    username: ssh.username?.trim() ?? '',
+    authMethod,
+    privateKeyPath: authMethod === 'privateKey' ? ssh.privateKeyPath : undefined,
+    passwordEncrypted: authMethod === 'password' ? secret('password') : undefined,
+    passphraseEncrypted: authMethod === 'privateKey' ? secret('passphrase') : undefined
+  })
+}
+
 // Active connection pool
 const activeConnections = new Map<string, IDbDriver>()
+const pendingConnections = new Map<string, { driver: IDbDriver; promise: Promise<void> }>()
 
 const CONNECTION_TEST_TIMEOUT_MS = 10000
 
@@ -163,12 +241,21 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 }
 
 export async function listConnections(): Promise<ConnectionConfig[]> {
+  return readConnections()
+}
+
+function readConnections(): ConnectionConfig[] {
   const db = getInternalDb()
   const rows = db.prepare('SELECT * FROM connections ORDER BY name').all() as ConnectionRow[]
   return rows.map(rowToConfig)
 }
 
 export async function addConnection(formData: ConnectionFormData): Promise<ConnectionConfig> {
+  return insertConnection(formData)
+}
+
+function insertConnection(formData: ConnectionFormData): ConnectionConfig {
+  if (formData.type === 'sqlite' && formData.ssh) throw new Error('SQLite 文件连接不支持 SSH 隧道')
   const db = getInternalDb()
   const now = Date.now()
   const id = randomUUID()
@@ -192,7 +279,7 @@ export async function addConnection(formData: ConnectionFormData): Promise<Conne
     formData.filePath ?? null,
     formData.group ?? null,
     formData.tags ? JSON.stringify(formData.tags) : null,
-    formData.ssh ? JSON.stringify(formData.ssh) : null,
+    serializeSSH(formData.ssh),
     now,
     now
   )
@@ -215,6 +302,11 @@ export async function updateConnection(
     formData.password !== undefined && formData.password !== ''
       ? encryptPassword(formData.password)
       : existing.password_encrypted
+  const sshConfig =
+    formData.ssh !== undefined
+      ? serializeSSH(formData.ssh, existing.ssh_config)
+      : existing.ssh_config
+  await disconnectById(id)
 
   db.prepare(
     `
@@ -240,11 +332,7 @@ export async function updateConnection(
         ? JSON.stringify(formData.tags)
         : null
       : existing.tags,
-    formData.ssh !== undefined
-      ? formData.ssh
-        ? JSON.stringify(formData.ssh)
-        : null
-      : existing.ssh_config,
+    sshConfig,
     now,
     id
   )
@@ -273,6 +361,9 @@ export async function testConnection(
   if (!passwordToUse && existingId) {
     passwordToUse = getConnectionPassword(existingId)
   }
+  const savedSSH =
+    formData.ssh === null || !existingId ? undefined : getConnectionRuntimeConfig(existingId).ssh
+  const inputSSH = formData.ssh === undefined ? savedSSH : formData.ssh
 
   const tempConfig: ConnectionConfig = {
     id: 'test',
@@ -284,6 +375,13 @@ export async function testConnection(
     username: formData.username,
     ssl: formData.ssl,
     filePath: formData.filePath,
+    ssh: inputSSH
+      ? {
+          ...inputSSH,
+          password: inputSSH.password || savedSSH?.password,
+          passphrase: inputSSH.passphrase || savedSSH?.passphrase
+        }
+      : undefined,
     createdAt: Date.now(),
     updatedAt: Date.now()
   }
@@ -292,7 +390,7 @@ export async function testConnection(
     driver = createDriver(tempConfig, passwordToUse)
     await withTimeout(
       driver.testConnection(),
-      CONNECTION_TEST_TIMEOUT_MS,
+      tempConfig.ssh ? 90000 : CONNECTION_TEST_TIMEOUT_MS,
       getConnectionTimeoutMessage(tempConfig)
     )
     return { success: true, message: '连接成功', latencyMs: Date.now() - start }
@@ -315,29 +413,40 @@ export async function testConnection(
 
 export async function connectById(id: string): Promise<void> {
   if (activeConnections.has(id)) return
+  const pending = pendingConnections.get(id)
+  if (pending) return pending.promise
 
   const db = getInternalDb()
   const row = db.prepare('SELECT * FROM connections WHERE id = ?').get(id) as ConnectionRow
   if (!row) throw new Error(`Connection not found: ${id}`)
 
-  const config = rowToConfig(row)
+  const config = { ...rowToConfig(row), ssh: runtimeSSH(row.ssh_config) }
   const password = decryptPassword(row.password_encrypted)
   const driver = createDriver(config, password)
-  try {
-    await withTimeout(
-      driver.testConnection(),
-      CONNECTION_TEST_TIMEOUT_MS,
-      getConnectionTimeoutMessage(config)
-    )
-    activeConnections.set(id, driver)
-  } catch (err) {
+  const promise = (async () => {
+    await Promise.resolve()
     try {
-      await withTimeout(driver.disconnect(), 2000, 'disconnect timeout')
-    } catch {
-      // ignore cleanup failures while connectById is failing
+      if (pendingConnections.get(id)?.driver !== driver) throw new Error('连接已取消')
+      await withTimeout(
+        driver.testConnection(),
+        config.ssh ? 90000 : CONNECTION_TEST_TIMEOUT_MS,
+        getConnectionTimeoutMessage(config)
+      )
+      if (pendingConnections.get(id)?.driver !== driver) throw new Error('连接已取消')
+      activeConnections.set(id, driver)
+    } catch (err) {
+      try {
+        await withTimeout(driver.disconnect(), 2000, 'disconnect timeout')
+      } catch {
+        /* already closed */
+      }
+      throw err
+    } finally {
+      if (pendingConnections.get(id)?.driver === driver) pendingConnections.delete(id)
     }
-    throw err
-  }
+  })()
+  pendingConnections.set(id, { driver, promise })
+  return promise
 }
 
 export async function reconnectById(id: string): Promise<void> {
@@ -355,10 +464,13 @@ export async function reconnectById(id: string): Promise<void> {
 }
 
 export async function disconnectById(id: string): Promise<void> {
+  const pending = pendingConnections.get(id)
+  pendingConnections.delete(id)
+  if (pending) await pending.driver.disconnect()
   const driver = activeConnections.get(id)
   if (driver) {
-    await driver.disconnect()
     activeConnections.delete(id)
+    await driver.disconnect()
   }
 }
 
@@ -373,6 +485,14 @@ export function getConnectionConfig(id: string): ConnectionConfig {
   const row = db.prepare('SELECT * FROM connections WHERE id = ?').get(id) as ConnectionRow
   if (!row) throw new Error(`Connection not found: ${id}`)
   return rowToConfig(row)
+}
+
+export function getConnectionRuntimeConfig(id: string): ConnectionConfig {
+  const row = getInternalDb()
+    .prepare('SELECT * FROM connections WHERE id = ?')
+    .get(id) as ConnectionRow
+  if (!row) throw new Error(`Connection not found: ${id}`)
+  return { ...rowToConfig(row), ssh: runtimeSSH(row.ssh_config) }
 }
 
 export function getConnectionPassword(id: string): string {
@@ -427,25 +547,31 @@ export async function exportConnections(): Promise<string> {
   return JSON.stringify(exportData, null, 2)
 }
 
-export async function importConnections(jsonStr: string): Promise<number> {
-  const items = JSON.parse(jsonStr) as ConnectionConfig[]
-  let count = 0
-  for (const item of items) {
-    const formData: ConnectionFormData = {
-      name: item.name,
-      type: item.type,
-      host: item.host,
-      port: item.port,
-      database: item.database,
-      username: item.username,
-      ssl: item.ssl,
-      filePath: item.filePath,
-      group: item.group,
-      tags: item.tags,
-      ssh: item.ssh
-    }
-    await addConnection(formData)
-    count++
-  }
-  return count
+export async function previewConnectionImport(content: string): Promise<ConnectionImportPreview> {
+  return parseConnectionImport(content, await listConnections()).preview
+}
+
+export async function importConnections(
+  content: string,
+  selectedIndices?: number[]
+): Promise<number> {
+  // Save all selected connections atomically; never overwrite existing connections.
+  return getInternalDb().transaction(() => {
+    const { preview, forms } = parseConnectionImport(content, readConnections())
+    const selected =
+      selectedIndices ??
+      preview.entries.filter((entry) => entry.status === 'ready').map((entry) => entry.index)
+    if (
+      !Array.isArray(selected) ||
+      selected.length > 2000 ||
+      selected.some((index) => !Number.isInteger(index) || index < 0 || index >= forms.length)
+    )
+      throw new Error('无效的连接选择')
+    const entries = [...new Set(selected)].map((index) => preview.entries[index])
+    if (entries.some((entry) => entry.status === 'unsupported' || entry.status === 'invalid'))
+      throw new Error('选中的连接包含不支持或无效的配置，请重新预览')
+    const ready = entries.filter((entry) => entry.status === 'ready')
+    for (const entry of ready) insertConnection(forms[entry.index]!)
+    return ready.length
+  })()
 }

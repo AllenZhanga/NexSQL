@@ -1,14 +1,35 @@
 import { createPortal } from 'react-dom'
-import { useState, useRef } from 'react'
-import { Circle, Plug, Trash2, Edit2, Copy, Download, Upload } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ConnectionImportDialog } from '../connection/ConnectionImportDialog'
+import {
+  Circle,
+  Plug,
+  Trash2,
+  Edit2,
+  Copy,
+  Download,
+  Upload,
+  Search,
+  X,
+  ChevronDown,
+  ChevronRight
+} from 'lucide-react'
 import { clsx } from 'clsx'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { useQueryStore } from '@renderer/stores/queryStore'
 import { useUIStore } from '@renderer/stores/uiStore'
 import { useT } from '@renderer/stores/i18nStore'
+import { useSidebarStore } from '@renderer/stores/sidebarStore'
+import { matchingConnections, connectionAddress } from './connectionSearch'
 import type { ConnectionConfig, ConnectionStatus } from '@shared/types/connection'
 
-const DB_ICONS: Record<string, string> = { mysql: 'M', postgresql: 'P', mssql: 'S', sqlite: 'L', redis: 'R' }
+const DB_ICONS: Record<string, string> = {
+  mysql: 'M',
+  postgresql: 'P',
+  mssql: 'S',
+  sqlite: 'L',
+  redis: 'R'
+}
 const DB_COLORS: Record<string, string> = {
   mysql: 'text-orange-400',
   postgresql: 'text-blue-400',
@@ -19,16 +40,23 @@ const DB_COLORS: Record<string, string> = {
 
 function StatusDot({ status }: { status: ConnectionStatus }): JSX.Element {
   return (
-    <Circle size={7} className={clsx('shrink-0 fill-current', {
-      'text-accent-green': status === 'connected',
-      'text-accent-red': status === 'error',
-      'text-accent-yellow animate-pulse': status === 'connecting',
-      'text-text-muted': status === 'disconnected'
-    })} />
+    <Circle
+      size={7}
+      className={clsx('shrink-0 fill-current', {
+        'text-accent-green': status === 'connected',
+        'text-accent-red': status === 'error',
+        'text-accent-yellow animate-pulse': status === 'connecting',
+        'text-text-muted': status === 'disconnected'
+      })}
+    />
   )
 }
 
-interface CtxMenu { x: number; y: number; conn: ConnectionConfig }
+interface CtxMenu {
+  x: number
+  y: number
+  conn: ConnectionConfig
+}
 
 function ConnContextMenu({
   menu,
@@ -50,39 +78,53 @@ function ConnContextMenu({
   onOpenRedisBrowser: () => void
 }): JSX.Element {
   const t = useT()
-  const items = menu.conn.type === 'redis'
-    ? [
-        { label: t('conn.connectBtn'), action: onConnect },
-        { label: t('redis.openConsole'), action: onOpenRedisConsole },
-        { label: t('redis.openBrowser'), action: onOpenRedisBrowser },
-        { divider: true },
-        { label: t('conn.editConnMenu'), action: onEdit },
-        { label: t('conn.copyConn'), action: onDuplicate },
-        { divider: true },
-        { label: t('conn.deleteConn'), action: onDelete, danger: true }
-      ]
-    : [
-        { label: t('conn.connectBtn'), action: onConnect },
-        { label: t('conn.editConnMenu'), action: onEdit },
-        { label: t('conn.copyConn'), action: onDuplicate },
-        { divider: true },
-        { label: t('conn.deleteConn'), action: onDelete, danger: true }
-      ]
+  const items =
+    menu.conn.type === 'redis'
+      ? [
+          { label: t('conn.connectBtn'), action: onConnect },
+          { label: t('redis.openConsole'), action: onOpenRedisConsole },
+          { label: t('redis.openBrowser'), action: onOpenRedisBrowser },
+          { divider: true },
+          { label: t('conn.editConnMenu'), action: onEdit },
+          { label: t('conn.copyConn'), action: onDuplicate },
+          { divider: true },
+          { label: t('conn.deleteConn'), action: onDelete, danger: true }
+        ]
+      : [
+          { label: t('conn.connectBtn'), action: onConnect },
+          { label: t('conn.editConnMenu'), action: onEdit },
+          { label: t('conn.copyConn'), action: onDuplicate },
+          { divider: true },
+          { label: t('conn.deleteConn'), action: onDelete, danger: true }
+        ]
 
   return createPortal(
     <>
       <div className="fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[180px] text-xs"
-        style={{ top: menu.y, left: menu.x }}>
-        <div className="px-3 py-1 text-text-muted text-2xs border-b border-app-border mb-1 truncate font-medium">{menu.conn.name}</div>
+      <div
+        className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[180px] text-xs"
+        style={{ top: menu.y, left: menu.x }}
+      >
+        <div className="px-3 py-1 text-text-muted text-2xs border-b border-app-border mb-1 truncate font-medium">
+          {menu.conn.name}
+        </div>
         {items.map((item, i) =>
           'divider' in item ? (
             <div key={i} className="border-t border-app-border my-1" />
           ) : (
-            <button key={i} onClick={() => { item.action(); onClose() }}
-              className={clsx('w-full text-left px-3 py-1.5 hover:bg-app-active transition-colors',
-                'danger' in item && item.danger ? 'text-accent-red hover:text-accent-red' : 'text-text-secondary hover:text-text-primary'
-              )}>
+            <button
+              key={i}
+              onClick={() => {
+                item.action()
+                onClose()
+              }}
+              className={clsx(
+                'w-full text-left px-3 py-1.5 hover:bg-app-active transition-colors',
+                'danger' in item && item.danger
+                  ? 'text-accent-red hover:text-accent-red'
+                  : 'text-text-secondary hover:text-text-primary'
+              )}
+            >
               {item.label}
             </button>
           )
@@ -95,11 +137,32 @@ function ConnContextMenu({
 
 export function ConnectionList(): JSX.Element {
   const t = useT()
-  const { connections, statuses, activeConnectionId, connect, disconnect, deleteConnection, duplicateConnection, loadConnections } = useConnectionStore()
+  const {
+    connections,
+    statuses,
+    activeConnectionId,
+    connect,
+    disconnect,
+    deleteConnection,
+    duplicateConnection,
+    loadConnections
+  } = useConnectionStore()
   const { loadSchema, openRedisConsoleTab, openRedisBrowserTab } = useQueryStore()
   const { openConnectionDialog } = useUIStore()
   const [ctxMenu, setCtxMenu] = useState<CtxMenu | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const [showImport, setShowImport] = useState(false)
+  const { connectionSearch, collapsedGroups, setConnectionSearch, toggleGroup } = useSidebarStore()
+  const searchInput = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const rowRefs = useRef(new Map<string, HTMLButtonElement>())
+  const filtered = useMemo(
+    () => matchingConnections(connections, connectionSearch),
+    [connections, connectionSearch]
+  )
+  const searching = !!connectionSearch.trim()
+  useEffect(() => {
+    if (listRef.current) listRef.current.scrollTop = 0
+  }, [connectionSearch])
 
   const openRedisWorkspace = (conn: ConnectionConfig, mode: 'console' | 'browser'): void => {
     const database = conn.database ?? '0'
@@ -181,124 +244,318 @@ export function ConnectionList(): JSX.Element {
     const blob = new Blob([json], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
-    a.href = url; a.download = 'nexsql-connections.json'; a.click()
+    a.href = url
+    a.download = 'nexsql-connections.json'
+    a.click()
     URL.revokeObjectURL(url)
   }
 
-  const handleImportConnections = (): void => { fileInputRef.current?.click() }
-
-  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
-    const file = e.target.files?.[0]
-    if (!file || !window.db) return
-    const text = await file.text()
-    try {
-      const count = await window.db.importConnections(text)
-      await loadConnections()
-      alert(`已成功导入 ${count} 个连接`)
-    } catch (err) {
-      alert('导入失败: ' + String(err))
-    }
-    e.target.value = ''
+  const handleImportConnections = (): void => {
+    setShowImport(true)
   }
 
-  const grouped = connections.reduce<Record<string, ConnectionConfig[]>>((acc, conn) => {
-    const grp = conn.group || ''
-    ;(acc[grp] = acc[grp] || []).push(conn)
+  const grouped = filtered.reduce<Map<string, ConnectionConfig[]>>((acc, conn) => {
+    const group = conn.group || ''
+    const members = acc.get(group) ?? []
+    members.push(conn)
+    acc.set(group, members)
     return acc
-  }, {})
-  const groupNames = Object.keys(grouped).sort((a, b) => a === '' ? 1 : b === '' ? -1 : a.localeCompare(b))
+  }, new Map())
+  const groupNames = [...grouped.keys()].sort((a, b) =>
+    a === '' ? 1 : b === '' ? -1 : a.localeCompare(b)
+  )
+  const visible = groupNames.flatMap((group) =>
+    searching || !collapsedGroups.includes(group) ? grouped.get(group)! : []
+  )
+  const focusRow = (id: string): void => {
+    const row = rowRefs.current.get(id)
+    row?.focus({ preventScroll: true })
+    row?.scrollIntoView({ block: 'nearest' })
+  }
 
   return (
-    <div className="py-1">
-      <div className="px-3 py-1 flex items-center justify-between">
-        <span className="text-2xs text-text-muted uppercase tracking-wider font-semibold">{t('sidebar.connections')}</span>
+    <section
+      className="connection-pane h-full min-h-0 flex flex-col"
+      aria-label={t('sidebar.connections')}
+    >
+      <div className="px-3 pt-2 pb-1.5 flex items-center justify-between shrink-0">
+        <span className="text-2xs text-text-muted uppercase tracking-wider font-semibold">
+          {t('sidebar.connections')}{' '}
+          <span className="font-normal tabular-nums" aria-live="polite">
+            {searching ? `${filtered.length} / ${connections.length}` : connections.length}
+          </span>
+        </span>
         <div className="flex gap-1">
-          <button onClick={handleImportConnections} title={t('export.importConnections')} className="p-0.5 text-text-muted hover:text-text-primary rounded hover:bg-app-hover transition-colors">
-            <Upload size={10} />
+          <button
+            onClick={handleImportConnections}
+            title={t('export.importConnections')}
+            className="p-1 text-text-muted hover:text-text-primary rounded hover:bg-app-hover transition-colors"
+          >
+            <Upload size={12} />
           </button>
-          <button onClick={handleExportConnections} title={t('export.exportConnections')} className="p-0.5 text-text-muted hover:text-text-primary rounded hover:bg-app-hover transition-colors">
-            <Download size={10} />
+          <button
+            onClick={handleExportConnections}
+            title={t('export.exportConnections')}
+            className="p-1 text-text-muted hover:text-text-primary rounded hover:bg-app-hover transition-colors"
+          >
+            <Download size={12} />
           </button>
         </div>
       </div>
-      <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleFileImport} />
-
-      {connections.length === 0 ? (
-        <div className="p-4 text-center">
-          <p className="text-text-muted text-xs">暂无连接</p>
-          <button onClick={() => openConnectionDialog()} className="mt-2 text-xs text-accent-blue hover:underline">添加连接</button>
+      <div className="px-2 pb-2 shrink-0">
+        <div className="relative">
+          <Search
+            size={12}
+            className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none"
+          />
+          <input
+            ref={searchInput}
+            type="text"
+            value={connectionSearch}
+            aria-label={t('sidebar.searchConnections')}
+            placeholder={t('sidebar.searchConnections')}
+            aria-describedby="connection-search-hint"
+            onChange={(e) => setConnectionSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing) return
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setConnectionSearch('')
+              }
+              if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && visible.length) {
+                e.preventDefault()
+                focusRow((e.key === 'ArrowDown' ? visible[0] : visible.at(-1)!).id)
+              }
+              if (e.key === 'Enter' && visible.length) {
+                e.preventDefault()
+                useConnectionStore.getState().setActiveConnection(visible[0].id)
+                focusRow(visible[0].id)
+              }
+            }}
+            className="w-full bg-app-input border border-app-border rounded-md pl-7 pr-7 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-blue transition-colors"
+          />
+          {connectionSearch && (
+            <button
+              aria-label={t('sidebar.clearConnectionSearch')}
+              onClick={() => {
+                setConnectionSearch('')
+                searchInput.current?.focus()
+              }}
+              className="absolute right-1 top-1/2 -translate-y-1/2 p-1 rounded text-text-muted hover:text-text-primary"
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
-      ) : (
-        groupNames.map((grpName) => (
-          <div key={grpName}>
-            {grpName && (
-              <div className="px-3 py-0.5 text-2xs text-text-muted uppercase tracking-wide font-semibold mt-1 border-b border-app-border/40">
-                {grpName}
-              </div>
-            )}
-            {grouped[grpName].map((conn) => {
-              const status = statuses[conn.id] ?? 'disconnected'
-              const isActive = activeConnectionId === conn.id
-              return (
-                <div
-                  key={conn.id}
-                  onClick={() => useConnectionStore.getState().setActiveConnection(conn.id)}
-                  onDoubleClick={() => void handleDoubleClick(conn)}
-                  onContextMenu={(e) => handleContextMenu(e, conn)}
-                  className={clsx('flex items-center gap-2 px-3 py-1.5 cursor-pointer group transition-colors',
-                    isActive ? 'bg-app-active' : 'hover:bg-app-hover'
-                  )}
-                  title={conn.type === 'redis' ? t('redis.connectionHint') : '双击连接并展开 Schema / 右键更多选项'}
-                >
-                  <span className={clsx('text-2xs font-bold font-mono w-4 text-center shrink-0', DB_COLORS[conn.type] ?? 'text-text-muted')}>
-                    {DB_ICONS[conn.type] ?? '?'}
-                  </span>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs truncate text-text-primary">{conn.name}</div>
-                    {conn.tags && conn.tags.length > 0 && (
-                      <div className="flex gap-0.5 mt-0.5 flex-wrap">
-                        {conn.tags.map((tag) => (
-                          <span key={tag} className="text-2xs bg-accent-blue/20 text-accent-blue px-1 rounded">{tag}</span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <StatusDot status={status} />
-                  <div className="hidden group-hover:flex items-center gap-0.5">
-                    {conn.type === 'redis' && status === 'connected' && (
-                      <>
-                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'console') }} title={t('redis.openConsole')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
-                          <span className="px-1 text-[10px] font-medium">Console</span>
-                        </button>
-                        <button onClick={(e) => { e.stopPropagation(); openRedisWorkspace(conn, 'browser') }} title={t('redis.openBrowser')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
-                          <span className="px-1 text-[10px] font-medium">Keys</span>
-                        </button>
-                      </>
-                    )}
-                    <button onClick={(e) => void handleConnect(conn.id, e)} title={status === 'connected' ? t('conn.disconnectBtn') : t('conn.connectBtn')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
-                      <Plug size={11} />
-                    </button>
-                    <button onClick={() => openConnectionDialog(conn.id)} title={t('conn.editConnMenu')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
-                      <Edit2 size={11} />
-                    </button>
-                    <button onClick={(e) => void handleDuplicate(conn.id, e)} title={t('conn.copyConn')} className="p-0.5 rounded text-text-muted hover:text-text-primary">
-                      <Copy size={11} />
-                    </button>
-                    <button onClick={() => void handleDelete(conn.id)} title={t('conn.deleteConn')} className="p-0.5 rounded text-text-muted hover:text-accent-red">
-                      <Trash2 size={11} />
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
+        <span id="connection-search-hint" className="sr-only">
+          {t('sidebar.searchHint')}
+        </span>
+      </div>
+      <div
+        ref={listRef}
+        className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1"
+        data-testid="connection-list-scroll"
+      >
+        {!connections.length ? (
+          <div className="p-4 text-center">
+            <p className="text-text-muted text-xs">{t('sidebar.noConnections')}</p>
+            <button
+              onClick={() => openConnectionDialog()}
+              className="mt-2 text-xs text-accent-blue hover:underline"
+            >
+              {t('conn.newConn')}
+            </button>
           </div>
-        ))
+        ) : !filtered.length ? (
+          <div className="px-4 py-5 text-center">
+            <p className="text-xs text-text-secondary">{t('sidebar.noConnectionMatches')}</p>
+            <p className="mt-1 text-2xs text-text-muted">{t('sidebar.searchHint')}</p>
+            <button
+              onClick={() => {
+                setConnectionSearch('')
+                searchInput.current?.focus()
+              }}
+              className="mt-2 text-xs text-accent-blue hover:underline"
+            >
+              {t('sidebar.clearConnectionSearch')}
+            </button>
+          </div>
+        ) : (
+          groupNames.map((group) => {
+            const expanded = searching || !collapsedGroups.includes(group)
+            const groupConnections = grouped.get(group)!
+            return (
+              <div key={group}>
+                <button
+                  type="button"
+                  aria-expanded={expanded}
+                  disabled={searching}
+                  onClick={() => toggleGroup(group)}
+                  className="connection-group w-full flex items-center gap-1.5 px-3 py-1.5 text-2xs text-text-muted font-semibold hover:bg-app-hover disabled:hover:bg-transparent"
+                >
+                  {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+                  <span className="truncate">{group || t('sidebar.ungrouped')}</span>
+                  <span className="ml-auto font-normal tabular-nums">
+                    {groupConnections.length}
+                  </span>
+                </button>
+                {expanded &&
+                  groupConnections.map((conn) => {
+                    const status = statuses[conn.id] ?? 'disconnected'
+                    const isActive = activeConnectionId === conn.id
+                    const address = connectionAddress(conn)
+                    return (
+                      <div
+                        key={conn.id}
+                        onDoubleClick={() => void handleDoubleClick(conn)}
+                        onContextMenu={(e) => handleContextMenu(e, conn)}
+                        className={clsx(
+                          'connection-row relative group',
+                          isActive ? 'bg-app-active' : 'hover:bg-app-hover'
+                        )}
+                      >
+                        <button
+                          ref={(node) => {
+                            if (node) rowRefs.current.set(conn.id, node)
+                            else rowRefs.current.delete(conn.id)
+                          }}
+                          type="button"
+                          aria-label={`${conn.name} · ${address}`}
+                          aria-pressed={isActive}
+                          onClick={() => useConnectionStore.getState().setActiveConnection(conn.id)}
+                          onKeyDown={(e) => {
+                            if (e.nativeEvent.isComposing) return
+                            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                              e.preventDefault()
+                              const index = visible.findIndex((item) => item.id === conn.id)
+                              focusRow(
+                                visible[
+                                  Math.max(
+                                    0,
+                                    Math.min(
+                                      visible.length - 1,
+                                      index + (e.key === 'ArrowDown' ? 1 : -1)
+                                    )
+                                  )
+                                ].id
+                              )
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault()
+                              setConnectionSearch('')
+                              searchInput.current?.focus()
+                            }
+                          }}
+                          className="connection-select w-full text-left flex items-start gap-2 px-3 py-2 pr-8 min-w-0"
+                          title={`${conn.name} · ${address}\n${conn.type === 'redis' ? t('redis.connectionHint') : t('sidebar.connectionHint')}`}
+                        >
+                          <span
+                            className={clsx(
+                              'text-2xs font-bold font-mono w-4 text-center shrink-0 mt-0.5',
+                              DB_COLORS[conn.type] ?? 'text-text-muted'
+                            )}
+                          >
+                            {DB_ICONS[conn.type] ?? '?'}
+                          </span>
+                          <span className="flex-1 min-w-0">
+                            <span className="block text-xs truncate text-text-primary">
+                              {conn.name}
+                            </span>
+                            <span className="block text-2xs truncate text-text-muted mt-0.5 font-mono">
+                              {address}
+                            </span>
+                            {!!conn.tags?.length && (
+                              <span className="flex gap-1 mt-1 overflow-hidden">
+                                {conn.tags.map((tag) => (
+                                  <span
+                                    key={tag}
+                                    className="text-2xs bg-accent-blue/20 text-accent-blue px-1 rounded truncate shrink-0 max-w-[90px]"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                              </span>
+                            )}
+                          </span>
+                        </button>
+                        <span className="absolute right-3 top-3 pointer-events-none">
+                          <StatusDot status={status} />
+                        </span>
+                        <div
+                          className="connection-actions absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded border border-app-border bg-app-sidebar p-0.5 shadow-sm opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+                          onClick={(e) => e.stopPropagation()}
+                          onDoubleClick={(e) => e.stopPropagation()}
+                        >
+                          {conn.type === 'redis' && status === 'connected' && (
+                            <>
+                              <button
+                                onClick={() => openRedisWorkspace(conn, 'console')}
+                                title={t('redis.openConsole')}
+                                className="p-1 text-text-muted hover:text-text-primary"
+                              >
+                                Console
+                              </button>
+                              <button
+                                onClick={() => openRedisWorkspace(conn, 'browser')}
+                                title={t('redis.openBrowser')}
+                                className="p-1 text-text-muted hover:text-text-primary"
+                              >
+                                Keys
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={(e) => void handleConnect(conn.id, e)}
+                            title={
+                              status === 'connected'
+                                ? t('conn.disconnectBtn')
+                                : t('conn.connectBtn')
+                            }
+                            className="p-1 rounded text-text-muted hover:text-text-primary"
+                          >
+                            <Plug size={12} />
+                          </button>
+                          <button
+                            onClick={() => openConnectionDialog(conn.id)}
+                            title={t('conn.editConnMenu')}
+                            className="p-1 rounded text-text-muted hover:text-text-primary"
+                          >
+                            <Edit2 size={12} />
+                          </button>
+                          <button
+                            onClick={(e) => void handleDuplicate(conn.id, e)}
+                            title={t('conn.copyConn')}
+                            className="p-1 rounded text-text-muted hover:text-text-primary"
+                          >
+                            <Copy size={12} />
+                          </button>
+                          <button
+                            onClick={() => void handleDelete(conn.id)}
+                            title={t('conn.deleteConn')}
+                            className="p-1 rounded text-text-muted hover:text-accent-red"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+              </div>
+            )
+          })
+        )}
+      </div>
+      {showImport && (
+        <ConnectionImportDialog onClose={() => setShowImport(false)} onImported={loadConnections} />
       )}
       {ctxMenu && (
         <ConnContextMenu
           menu={ctxMenu}
           onClose={() => setCtxMenu(null)}
-          onConnect={() => { const e = { stopPropagation: () => {} } as React.MouseEvent; void handleConnect(ctxMenu.conn.id, e) }}
+          onConnect={() => {
+            const e = { stopPropagation: () => {} } as React.MouseEvent
+            void handleConnect(ctxMenu.conn.id, e)
+          }}
           onEdit={() => openConnectionDialog(ctxMenu.conn.id)}
           onDuplicate={() => void handleDuplicate(ctxMenu.conn.id)}
           onDelete={() => void handleDelete(ctxMenu.conn.id)}
@@ -306,6 +563,6 @@ export function ConnectionList(): JSX.Element {
           onOpenRedisBrowser={() => openRedisWorkspace(ctxMenu.conn, 'browser')}
         />
       )}
-    </div>
+    </section>
   )
 }

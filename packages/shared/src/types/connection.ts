@@ -6,6 +6,10 @@ export interface SSHConfig {
   username: string
   password?: string
   privateKeyPath?: string
+  authMethod?: 'password' | 'privateKey'
+  passphrase?: string
+  hasPassword?: boolean
+  hasPassphrase?: boolean
 }
 
 export interface ConnectionConfig {
@@ -17,6 +21,7 @@ export interface ConnectionConfig {
   database?: string
   username?: string
   ssl?: boolean
+  tlsServerName?: string // Runtime only: original database host behind a local SSH forward.
   filePath?: string // SQLite only
   group?: string
   tags?: string[]
@@ -37,7 +42,7 @@ export interface ConnectionFormData {
   filePath?: string
   group?: string
   tags?: string[]
-  ssh?: SSHConfig
+  ssh?: SSHConfig | null
 }
 
 export interface ConnectionTestResult {

@@ -72,11 +72,18 @@ export interface QueryTab {
   redisPageSize?: number
 }
 
+export const schemaRequestKey = (connectionId: string, database?: string): string =>
+  JSON.stringify([connectionId, database ?? null])
+const schemaRequests = new Map<string, { connectionId: string; promise: Promise<void> }>()
+const schemaGenerations = new Map<string, number>()
+
 interface QueryState {
   tabs: QueryTab[]
   activeTabId: string | null
   history: QueryHistoryEntry[]
   schema: Record<string, DatabaseSchema> // keyed by connectionId
+  schemaLoading: Record<string, boolean>
+  schemaErrors: Record<string, string | undefined>
 
   // Tab actions
   newTab: (connectionId?: string) => string
@@ -96,7 +103,8 @@ interface QueryState {
   executeQuery: (tabId: string, sqlOverride?: string) => Promise<void>
 
   // Schema actions
-  loadSchema: (connectionId: string, database?: string) => Promise<void>
+  loadSchema: (connectionId: string, database?: string, force?: boolean) => Promise<void>
+  clearSchema: (connectionId: string) => void
   getSchema: (connectionId: string) => DatabaseSchema | null
 
   cancelQuery: (tabId: string) => Promise<void>
@@ -112,6 +120,8 @@ export const useQueryStore = create<QueryState>()(
       activeTabId: null,
       history: [],
       schema: {},
+      schemaLoading: {},
+      schemaErrors: {},
 
       newTab: (connectionId) => {
         const id = crypto.randomUUID()
@@ -406,19 +416,96 @@ export const useQueryStore = create<QueryState>()(
         }
       },
 
-      loadSchema: async (connectionId, database) => {
+      clearSchema: (connectionId) => {
+        schemaGenerations.set(connectionId, (schemaGenerations.get(connectionId) ?? 0) + 1)
+        for (const [key, request] of schemaRequests)
+          if (request.connectionId === connectionId) schemaRequests.delete(key)
+        set((state) => ({
+          schema: Object.fromEntries(
+            Object.entries(state.schema).filter(([id]) => id !== connectionId)
+          ),
+          schemaLoading: Object.fromEntries(
+            Object.entries(state.schemaLoading).filter(
+              ([key]) => JSON.parse(key)[0] !== connectionId
+            )
+          ),
+          schemaErrors: Object.fromEntries(
+            Object.entries(state.schemaErrors).filter(
+              ([key]) => JSON.parse(key)[0] !== connectionId
+            )
+          )
+        }))
+      },
+
+      loadSchema: async (connectionId, database, force = true) => {
+        if (!window.db) return
+        const connectionState = useConnectionStore.getState()
+        if (
+          !connectionState.connections.some((c) => c.id === connectionId) ||
+          connectionState.statuses[connectionId] !== 'connected'
+        )
+          return
+        const key = schemaRequestKey(connectionId, database)
+        const pending = schemaRequests.get(key)
+        if (pending) return pending.promise
+        const cached = get().schema[connectionId]
+        if (
+          !force &&
+          (database === undefined
+            ? !!cached
+            : cached?.databases.some((db) => db.name === database && db.tablesLoaded))
+        )
+          return
+        const generation = schemaGenerations.get(connectionId) ?? 0
+        const valid = () =>
+          (schemaGenerations.get(connectionId) ?? 0) === generation &&
+          useConnectionStore.getState().statuses[connectionId] === 'connected'
+        set((state) => ({
+          schemaLoading: { ...state.schemaLoading, [key]: true },
+          schemaErrors: { ...state.schemaErrors, [key]: undefined }
+        }))
+        const promise = (async () => {
+          try {
+            const incoming = await window.db!.getSchema(connectionId, database)
+            if (!valid()) return
+            set((state) => {
+              const previous = state.schema[connectionId]?.databases ?? []
+              const incomingByName = new Map(incoming.databases.map((db) => [db.name, db]))
+              const databases =
+                database === undefined
+                  ? incoming.databases.map(
+                      (db) => previous.find((old) => old.name === db.name && old.tablesLoaded) ?? db
+                    )
+                  : [
+                      ...previous.map((db) =>
+                        incomingByName.get(db.name)
+                          ? { ...incomingByName.get(db.name)!, tablesLoaded: true }
+                          : db
+                      ),
+                      ...incoming.databases
+                        .filter((db) => !previous.some((old) => old.name === db.name))
+                        .map((db) => ({ ...db, tablesLoaded: true }))
+                    ]
+              return { schema: { ...state.schema, [connectionId]: { ...incoming, databases } } }
+            })
+          } catch (error) {
+            if (valid())
+              set((state) => ({
+                schemaErrors: {
+                  ...state.schemaErrors,
+                  [key]: error instanceof Error ? error.message : String(error)
+                }
+              }))
+          } finally {
+            if (valid())
+              set((state) => ({ schemaLoading: { ...state.schemaLoading, [key]: false } }))
+          }
+        })()
+        schemaRequests.set(key, { connectionId, promise })
         try {
-          if (!window.db) return
-          const { connections, statuses } = useConnectionStore.getState()
-          const connection = connections.find((item) => item.id === connectionId)
-          if (!connection) return
-          if ((statuses[connectionId] ?? 'disconnected') !== 'connected') return
-          const schema = await window.db.getSchema(connectionId, database)
-          set((state) => ({
-            schema: { ...state.schema, [connectionId]: schema }
-          }))
-        } catch {
-          // Silently fail schema load
+          await promise
+        } finally {
+          if (schemaRequests.get(key)?.promise === promise) schemaRequests.delete(key)
         }
       },
 

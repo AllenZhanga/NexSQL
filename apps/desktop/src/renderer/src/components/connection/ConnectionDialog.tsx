@@ -1,5 +1,7 @@
-﻿import { useState, useEffect } from 'react'
-import { X, TestTube2, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight, Info } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { SSHConnectionFields } from './SSHConnectionFields'
+import { validateSSHConfig } from '@shared/ssh'
+import { X, TestTube2, Loader2, CheckCircle2, XCircle, ChevronDown, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { useUIStore } from '@renderer/stores/uiStore'
@@ -77,7 +79,6 @@ export function ConnectionDialog(): JSX.Element {
   const [sshForm, setSshForm] = useState<SSHConfig>(() =>
     editingConn?.ssh ?? { host: '', port: 22, username: '', password: '', privateKeyPath: '' }
   )
-  const [showSsh, setShowSsh] = useState(false)
 
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
@@ -86,7 +87,6 @@ export function ConnectionDialog(): JSX.Element {
   const [availableDbs, setAvailableDbs] = useState<string[]>([])
   const [showDbDropdown, setShowDbDropdown] = useState(false)
 
-  const showSshUnsupported = sshEnabled
 
   useEffect(() => {
     setTestResult(null)
@@ -95,6 +95,7 @@ export function ConnectionDialog(): JSX.Element {
   }, [form.host, form.port, form.username, form.password, form.type])
 
   const handleTypeChange = (type: DBType): void => {
+    if (type === 'sqlite') setSshEnabled(false)
     setForm((f) => ({
       ...f,
       type,
@@ -112,7 +113,7 @@ export function ConnectionDialog(): JSX.Element {
     try {
       const testForm: ConnectionFormData = {
         ...form,
-        ssh: sshEnabled ? sshForm : undefined
+        ssh: sshEnabled ? sshForm : null
       }
       const result = await window.db!.testConnection(testForm, editingConnectionId ?? undefined)
       setTestResult(result)
@@ -130,6 +131,9 @@ export function ConnectionDialog(): JSX.Element {
       setError(t('redis.conn.databaseError'))
       return
     }
+    if (sshEnabled) {
+      try { validateSSHConfig(sshForm) } catch (err) { setError((err as Error).message); return }
+    }
     setSaving(true)
     setError(null)
     const parsedTags = tagsInput.trim()
@@ -140,7 +144,7 @@ export function ConnectionDialog(): JSX.Element {
       database: form.type === 'redis' ? (form.database?.trim() || '0') : form.database,
       username: form.type === 'redis' ? form.username?.trim() : form.username,
       tags: parsedTags,
-      ssh: sshEnabled ? sshForm : undefined
+      ssh: sshEnabled ? sshForm : null
     }
     try {
       if (editingConnectionId) {
@@ -273,69 +277,7 @@ export function ConnectionDialog(): JSX.Element {
                 <span className="text-xs text-text-secondary">{t('redis.conn.sslHint')}</span>
               </label>
 
-              {showSshUnsupported && (
-                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-text-primary">
-                  {t('conn.sshUnsupported')}
-                </div>
-              )}
-
-              <div className="border border-app-border rounded">
-                <button type="button" onClick={() => setShowSsh((v) => !v)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-text-secondary hover:text-text-primary transition-colors">
-                  {showSsh ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  <span className="font-medium">{t('conn.sshTunnel')}</span>
-                  {sshEnabled && (
-                    <span className="ml-auto inline-flex items-center rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-2xs text-emerald-500">
-                      已启用
-                    </span>
-                  )}
-                </button>
-                {showSsh && (
-                  <div className="px-3 pb-3 space-y-2 border-t border-app-border">
-                    <label className="flex items-center gap-2 cursor-pointer pt-2">
-                      <input type="checkbox" checked={sshEnabled}
-                        onChange={(e) => setSshEnabled(e.target.checked)}
-                        className="accent-accent-blue" />
-                      <span className="text-xs text-text-secondary">{t('conn.sshEnable')}</span>
-                    </label>
-                    {sshEnabled && (
-                      <>
-                        <div className="grid grid-cols-3 gap-2">
-                          <div className="col-span-2">
-                            <Field label={t('conn.sshHost')}>
-                              <input type="text" value={sshForm.host}
-                                onChange={(e) => setSshForm((f) => ({ ...f, host: e.target.value }))}
-                                placeholder="bastion.example.com" className={inputClass} />
-                            </Field>
-                          </div>
-                          <Field label={t('conn.sshPort')}>
-                            <input type="number" value={sshForm.port}
-                              onChange={(e) => setSshForm((f) => ({ ...f, port: parseInt(e.target.value) || 22 }))}
-                              className={inputClass} />
-                          </Field>
-                        </div>
-                        <Field label={t('conn.sshUser')}>
-                          <input type="text" value={sshForm.username}
-                            onChange={(e) => setSshForm((f) => ({ ...f, username: e.target.value }))}
-                            placeholder="ubuntu" className={inputClass} />
-                        </Field>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Field label={t('conn.sshPassword')}>
-                            <input type="password" value={sshForm.password ?? ''}
-                              onChange={(e) => setSshForm((f) => ({ ...f, password: e.target.value }))}
-                              className={inputClass} autoComplete="new-password" />
-                          </Field>
-                          <Field label={t('conn.sshKeyPath')}>
-                            <input type="text" value={sshForm.privateKeyPath ?? ''}
-                              onChange={(e) => setSshForm((f) => ({ ...f, privateKeyPath: e.target.value }))}
-                              placeholder="~/.ssh/id_rsa" className={inputClass} />
-                          </Field>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+              <SSHConnectionFields enabled={sshEnabled} onEnabledChange={setSshEnabled} value={sshForm} onChange={setSshForm} />
             </>
           ) : (
             <>
@@ -403,70 +345,7 @@ export function ConnectionDialog(): JSX.Element {
                 <span className="text-xs text-text-secondary">{t('conn.ssl')}</span>
               </label>
 
-              {showSshUnsupported && (
-                <div className="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-text-primary">
-                  {t('conn.sshUnsupported')}
-                </div>
-              )}
-
-              {/* SSH Tunnel */}
-              <div className="border border-app-border rounded">
-                <button type="button" onClick={() => setShowSsh((v) => !v)}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-xs text-text-secondary hover:text-text-primary transition-colors">
-                  {showSsh ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                  <span className="font-medium">{t('conn.sshTunnel')}</span>
-                  {sshEnabled && (
-                    <span className="ml-auto inline-flex items-center rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-2xs text-emerald-500">
-                      已启用
-                    </span>
-                  )}
-                </button>
-                {showSsh && (
-                  <div className="px-3 pb-3 space-y-2 border-t border-app-border">
-                    <label className="flex items-center gap-2 cursor-pointer pt-2">
-                      <input type="checkbox" checked={sshEnabled}
-                        onChange={(e) => setSshEnabled(e.target.checked)}
-                        className="accent-accent-blue" />
-                      <span className="text-xs text-text-secondary">{t('conn.sshEnable')}</span>
-                    </label>
-                    {sshEnabled && (
-                      <>
-                        <div className="grid grid-cols-3 gap-2">
-                          <div className="col-span-2">
-                            <Field label={t('conn.sshHost')}>
-                              <input type="text" value={sshForm.host}
-                                onChange={(e) => setSshForm((f) => ({ ...f, host: e.target.value }))}
-                                placeholder="bastion.example.com" className={inputClass} />
-                            </Field>
-                          </div>
-                          <Field label={t('conn.sshPort')}>
-                            <input type="number" value={sshForm.port}
-                              onChange={(e) => setSshForm((f) => ({ ...f, port: parseInt(e.target.value) || 22 }))}
-                              className={inputClass} />
-                          </Field>
-                        </div>
-                        <Field label={t('conn.sshUser')}>
-                          <input type="text" value={sshForm.username}
-                            onChange={(e) => setSshForm((f) => ({ ...f, username: e.target.value }))}
-                            placeholder="ubuntu" className={inputClass} />
-                        </Field>
-                        <div className="grid grid-cols-2 gap-2">
-                          <Field label={t('conn.sshPassword')}>
-                            <input type="password" value={sshForm.password ?? ''}
-                              onChange={(e) => setSshForm((f) => ({ ...f, password: e.target.value }))}
-                              className={inputClass} autoComplete="new-password" />
-                          </Field>
-                          <Field label={t('conn.sshKeyPath')}>
-                            <input type="text" value={sshForm.privateKeyPath ?? ''}
-                              onChange={(e) => setSshForm((f) => ({ ...f, privateKeyPath: e.target.value }))}
-                              placeholder="~/.ssh/id_rsa" className={inputClass} />
-                          </Field>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+              <SSHConnectionFields enabled={sshEnabled} onEnabledChange={setSshEnabled} value={sshForm} onChange={setSshForm} />
             </>
           )}
 

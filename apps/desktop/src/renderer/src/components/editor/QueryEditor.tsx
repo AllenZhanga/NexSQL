@@ -38,6 +38,16 @@ export function QueryEditor(): JSX.Element {
   const [availableDbs, setAvailableDbs] = useState<string[]>([])
 
   const activeTab = tabs.find((t) => t.id === activeTabId) ?? null
+  const currentSchemaTables = useQueryStore(state => state.schema[activeTab?.connectionId ?? '']?.databases.find(db => db.name === activeTab?.selectedDatabase)?.tables)
+  const updateFieldCompletions = (): void => {
+    completionSuggestionsRef.current = [
+      ...completionSuggestionsRef.current.filter(item => item.kind !== languages.CompletionItemKind.Field),
+      ...tableColumnsRef.current.flatMap(item => item.columns.flatMap(column => [
+        {label: `${item.table}.${column.name}`, kind: languages.CompletionItemKind.Field, insertText: `${item.table}.${column.name}`, detail: `${column.type} · ${item.table}`},
+        {label: column.name, kind: languages.CompletionItemKind.Field, insertText: column.name, detail: `${column.type} · ${item.table}`}
+      ]))
+    ]
+  }
   const connection = activeTab?.connectionId
     ? connections.find((c) => c.id === activeTab.connectionId)
     : null
@@ -190,7 +200,7 @@ export function QueryEditor(): JSX.Element {
               const parts = normalized.split('.')
               const tableName = normalizeSqlIdentifier(parts[parts.length - 1])
               if (tableName) {
-                // 从 tableColumnsRef（连接时已预加载）里同步查
+                // 从当前 SQL 已按需加载的字段缓存里同步查
                 const cached = tableColumnsRef.current.find(
                   (e) => normalizeSqlIdentifier(e.table).toLowerCase() === tableName.toLowerCase()
                 )
@@ -198,7 +208,7 @@ export function QueryEditor(): JSX.Element {
                   aliasColumnsRef.current.set(qKey, cached.columns)
                   cols = cached.columns
                 } else {
-                  // tableColumnsRef 也没有（超大库），异步拉取后重新触发补全
+                  // 当前表尚未加载，异步拉取后重新触发补全
                   const tab = useQueryStore
                     .getState()
                     .tabs.find((t) => t.id === activeTabIdRef.current)
@@ -211,12 +221,13 @@ export function QueryEditor(): JSX.Element {
                     window.db
                       .getTableColumns(connectionId, tableName, targetDb)
                       .then((columns) => {
-                        if (activeTabIdRef.current === tab?.id && columns.length > 0) {
+                        if (activeTabIdRef.current === tab?.id && columns.length > 0 && useQueryStore.getState().tabs.some(current => current.id === tab.id && current.connectionId === connectionId && current.selectedDatabase === tab.selectedDatabase)) {
                           aliasColumnsRef.current.set(qKey, columns)
                           tableColumnsRef.current = [
                             ...tableColumnsRef.current,
                             { table: tableName, database: targetDb ?? '', columns }
                           ]
+                          updateFieldCompletions()
                           // 重新触发补全弹窗
                           editorRef.current?.trigger('alias', 'editor.action.triggerSuggest', {})
                         }
@@ -311,13 +322,14 @@ export function QueryEditor(): JSX.Element {
               .db!.getTableColumns(connectionId, tableName, targetDb)
               .catch(() => [])
 
-            if (activeTabIdRef.current === tabId && columns.length > 0) {
+            if (activeTabIdRef.current === tabId && columns.length > 0 && useQueryStore.getState().tabs.some(current => current.id === tabId && current.connectionId === connectionId && current.selectedDatabase === tab?.selectedDatabase)) {
               aliasColumnsRef.current.set(qKey, columns)
               aliasTableRef.current.set(qKey, tableName.toLowerCase())
               tableColumnsRef.current = [
                 ...tableColumnsRef.current,
                 { table: tableName, database: targetDb ?? '', columns }
               ]
+              updateFieldCompletions()
             }
           }
         })()
@@ -364,17 +376,16 @@ export function QueryEditor(): JSX.Element {
     completionSuggestionsRef.current = baseSqlSuggestions()
 
     const loadCompletions = async (): Promise<void> => {
-      if (!activeTab?.connectionId || !window.db) {
+      if (!activeTab?.connectionId || !activeTab.selectedDatabase || !isConnected || !window.db) {
         completionSuggestionsRef.current = baseSqlSuggestions()
         tableColumnsRef.current = []
         return
       }
 
-      await loadSchema(activeTab.connectionId, activeTab.selectedDatabase ?? undefined)
+      await loadSchema(activeTab.connectionId, activeTab.selectedDatabase, false)
+      if (cancelled) return
       const schema = useQueryStore.getState().getSchema(activeTab.connectionId)
-      const targetDatabases = (schema?.databases ?? []).filter((db) =>
-        activeTab.selectedDatabase ? db.name === activeTab.selectedDatabase : true
-      )
+      const targetDatabases = (schema?.databases ?? []).filter(db => db.name === activeTab.selectedDatabase)
 
       const tableEntries = targetDatabases.flatMap((db) =>
         db.tables.map((table) => ({ database: db.name, table: table.name }))
@@ -391,43 +402,11 @@ export function QueryEditor(): JSX.Element {
         }))
       ]
 
-      if (tableEntries.length <= 200) {
-        const columnLists = await Promise.all(
-          tableEntries.map(async (entry) => ({
-            ...entry,
-            columns: await window
-              .db!.getTableColumns(activeTab.connectionId!, entry.table, entry.database)
-              .catch(() => [])
-          }))
-        )
-
-        if (cancelled) return
-        tableColumnsRef.current = columnLists.filter((e) => e.columns.length > 0)
-
-        for (const item of columnLists) {
-          for (const column of item.columns) {
-            suggestions.push({
-              label: `${item.table}.${column.name}`,
-              kind: languages.CompletionItemKind.Field,
-              insertText: `${item.table}.${column.name}`,
-              detail: `${column.type} · ${item.table}`,
-              documentation: `Column ${column.name} from ${item.table}`
-            })
-            suggestions.push({
-              label: column.name,
-              kind: languages.CompletionItemKind.Field,
-              insertText: column.name,
-              detail: `${column.type} · ${item.table}`,
-              documentation: `Column ${column.name} from ${item.table}`
-            })
-          }
-        }
-      } else {
-        // 表数量超过阈值时不预加载所有字段，依赖 prefetch 按需加载
-      }
+      // Column metadata is fetched only for tables referenced by the edited SQL.
 
       if (!cancelled) {
         completionSuggestionsRef.current = suggestions
+        updateFieldCompletions()
       }
     }
 
@@ -436,7 +415,7 @@ export function QueryEditor(): JSX.Element {
     return () => {
       cancelled = true
     }
-  }, [activeTab?.connectionId, activeTab?.selectedDatabase, loadSchema])
+  }, [activeTab?.connectionId, activeTab?.selectedDatabase, isConnected, currentSchemaTables, loadSchema])
 
   if (!activeTab) {
     return (

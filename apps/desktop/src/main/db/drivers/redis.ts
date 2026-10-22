@@ -9,6 +9,7 @@ interface RedisConfig {
   user?: string
   password?: string
   ssl?: boolean
+  tlsServerName?: string
 }
 
 const PREVIEW_LIMIT = 100
@@ -29,7 +30,7 @@ export class RedisDriver implements IDbDriver {
         port: config.port,
         connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
         reconnectStrategy: false,
-        ...(config.ssl ? { tls: true as const } : {})
+        ...(config.ssl ? { tls: true as const, servername: config.tlsServerName } : {})
       },
       database: Number(this.currentDatabase),
       username: auth.username,

@@ -48,7 +48,9 @@ export function ResultsPanel({
               : tab?.batch?.status === 'cancelled'
                 ? '已停止'
                 : tab?.batch?.status === 'failed' || tab?.error
-                  ? '执行失败'
+                  ? tab?.batch?.failedStatements
+                    ? `执行结束 · ${tab.batch.failedStatements} 处错误`
+                    : '执行失败'
                   : results.length
                     ? `${results.length} 个结果 · ${tab?.batch?.durationMs ?? result?.durationMs}ms`
                     : '就绪'}
@@ -67,9 +69,11 @@ export function ResultsPanel({
       </div>
       {(tab?.error || tab?.batch?.warning || tab?.batch?.status === 'cancelled') && (
         <div role="alert" className="execution-notice">
-          {tab.error ||
-            tab.batch?.warning ||
-            '已停止后续执行。取消不会撤销已经提交的语句，请核实写入结果。'}
+          {[tab.error, tab.batch?.warning].filter(Boolean).length
+            ? [tab.error, tab.batch?.warning]
+                .filter(Boolean)
+                .map((message, index) => <div key={index}>{message}</div>)
+            : '已停止后续执行。取消不会撤销已经提交的语句，请核实写入结果。'}
         </div>
       )}
       {results.length > 0 && (

@@ -1,4 +1,5 @@
 import type { QueryBatchResult, QueryProgress } from '@shared/types/query'
+import type { ConnectionImportPreview } from '@shared/types/connectionImport'
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
   ConnectionConfig,
@@ -30,6 +31,11 @@ const dbAPI = {
       callback(progress)
     ipcRenderer.on('db:queryProgress', listener)
     return () => ipcRenderer.off('db:queryProgress', listener)
+  },
+  onRefreshData: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('ui:refreshData', listener)
+    return () => ipcRenderer.off('ui:refreshData', listener)
   },
   listConnections: (): Promise<ConnectionConfig[]> => ipcRenderer.invoke('db:listConnections'),
 
@@ -151,8 +157,11 @@ const dbAPI = {
 
   exportConnections: (): Promise<string> => ipcRenderer.invoke('db:exportConnections'),
 
-  importConnections: (jsonStr: string): Promise<number> =>
-    ipcRenderer.invoke('db:importConnections', jsonStr)
+  previewConnectionImport: (content: string): Promise<ConnectionImportPreview> =>
+    ipcRenderer.invoke('db:previewConnectionImport', content),
+
+  importConnections: (content: string, selectedIndices?: number[]): Promise<number> =>
+    ipcRenderer.invoke('db:importConnections', content, selectedIndices)
 }
 
 const aiAPI = {

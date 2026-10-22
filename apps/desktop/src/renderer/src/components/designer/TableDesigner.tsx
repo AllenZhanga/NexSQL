@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { X, Plus, Trash2, RefreshCw, Play, Check, AlertTriangle } from 'lucide-react'
+import { X, Plus, Trash2, RefreshCw, Play, Check, AlertTriangle, Copy } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SchemaColumn } from '@shared/types/query'
 import type { DBType } from '@shared/types/connection'
@@ -249,6 +249,8 @@ export function TableDesigner({ connectionId, table, database, dbType, onClose }
   const [loading, setLoading] = useState(true)
   const [applying, setApplying] = useState(false)
   const [applyResult, setApplyResult] = useState<{ ok: boolean; msg: string } | null>(null)
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'error'>('idle')
+  const copyRequest = useRef(0)
 
   // New index form
   const [newIdxName, setNewIdxName] = useState('')
@@ -309,6 +311,32 @@ export function TableDesigner({ connectionId, table, database, dbType, onClose }
 
   const changeSQL = generateAlterSQL(dbType, table, database, origCols, draftCols, origIdxs, draftIdxs)
   const hasChanges = changeSQL !== '-- 无变更'
+  const displayedSQL = rightTab === 'ddl' ? ddl : changeSQL
+  const canCopySQL = !loading && !!displayedSQL.trim() && (rightTab === 'ddl' || hasChanges)
+
+  useEffect(() => {
+    setCopyStatus('idle')
+    copyRequest.current++
+    return () => { copyRequest.current++ }
+  }, [displayedSQL, rightTab, loading])
+
+  useEffect(() => {
+    if (copyStatus !== 'copied') return
+    const timer = window.setTimeout(() => setCopyStatus('idle'), 2000)
+    return () => window.clearTimeout(timer)
+  }, [copyStatus])
+
+  const copySQL = async (): Promise<void> => {
+    if (!canCopySQL || copyStatus === 'copying') return
+    const request = ++copyRequest.current
+    setCopyStatus('copying')
+    try {
+      await navigator.clipboard.writeText(displayedSQL)
+      if (request === copyRequest.current) setCopyStatus('copied')
+    } catch {
+      if (request === copyRequest.current) setCopyStatus('error')
+    }
+  }
 
   // Column helpers
   const updateCol = (id: string, patch: Partial<ColumnDraft>): void =>
@@ -513,7 +541,7 @@ export function TableDesigner({ connectionId, table, database, dbType, onClose }
 
           {/* Right: DDL / Changes */}
           <div className="flex flex-col flex-1 overflow-hidden">
-            <div className="flex border-b border-app-border shrink-0">
+            <div className="flex items-center flex-wrap border-b border-app-border shrink-0">
               {(['ddl', 'changes'] as RightTab[]).map((t) => (
                 <button
                   key={t}
@@ -537,7 +565,21 @@ export function TableDesigner({ connectionId, table, database, dbType, onClose }
                   )}
                 </button>
               ))}
+              <button
+                onClick={() => void copySQL()}
+                disabled={!canCopySQL || copyStatus === 'copying'}
+                title={rightTab === 'ddl' ? '复制完整建表语句' : '复制全部变更 SQL'}
+                className="ml-auto mr-2 my-1 flex items-center gap-1.5 px-2 py-1.5 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-app-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {copyStatus === 'copied' ? <Check size={13} /> : <Copy size={13} />}
+                <span role="status">{copyStatus === 'copied' ? '已复制' : copyStatus === 'copying' ? '复制中…' : '复制 SQL'}</span>
+              </button>
             </div>
+            {copyStatus === 'error' && (
+              <div role="alert" className="px-3 py-2 text-xs text-accent-red">
+                复制失败，请重试或选中下方 SQL 手动复制。
+              </div>
+            )}
             <pre className="flex-1 overflow-auto p-3 text-xs font-mono text-text-secondary leading-relaxed whitespace-pre-wrap break-words">
               {rightTab === 'ddl' ? ddl || '-- 加载中...' : changeSQL}
             </pre>

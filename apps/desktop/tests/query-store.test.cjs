@@ -4,7 +4,8 @@ const fs = require('node:fs'),
   path = require('node:path'),
   Module = require('node:module'),
   ts = require('typescript')
-function fixture() {
+function fixture(options = {}) {
+  const connectionState = options.connectionState ?? { connections: [], statuses: {} }
   const values = new Map()
   global.localStorage = {
     getItem: (k) => values.get(k) || null,
@@ -39,17 +40,18 @@ function fixture() {
   m.paths = module.paths
   m.require = (name) =>
     name === './connectionStore'
-      ? { useConnectionStore: { getState: () => ({ connections: [], statuses: {} }) } }
+      ? { useConnectionStore: { getState: () => connectionState } }
       : require(name)
   m._compile(
     ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS }
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 }
     }).outputText,
     filename
   )
   const store = m.exports.useQueryStore
   return {
     store,
+    connectionState,
     values,
     calls: () => calls,
     cancelled,
@@ -120,4 +122,134 @@ test('draft storage excludes results, busy state and data editing buffers', asyn
   assert.equal(saved.tabs[0].sql, 'SELECT 1;')
   assert.equal(saved.tabs[0].result, null)
   assert.equal(saved.tabs[0].isLoading, false)
+})
+
+function schemaFixture() {
+  const f = fixture({
+    connectionState: { connections: [{ id: 'c', type: 'mysql' }], statuses: { c: 'connected' } }
+  })
+  const requests = []
+  window.db.getSchema = (connectionId, database) =>
+    new Promise((resolve, reject) => requests.push({ database, resolve, reject }))
+  return { ...f, requests, key: (db) => JSON.stringify(['c', db ?? null]) }
+}
+const databaseList = (names) => ({
+  connectionId: 'c',
+  databases: names.map((name) => ({ name, tables: [], tablesLoaded: false }))
+})
+const tableList = (name, tables = ['orders']) => ({
+  connectionId: 'c',
+  databases: [
+    {
+      name,
+      tables: tables.map((name) => ({ name, type: 'table', columns: [] })),
+      tablesLoaded: true
+    }
+  ]
+})
+
+test('schema lists databases without eager table loads, and caches only requested databases', async () => {
+  const f = schemaFixture(),
+    s = f.store.getState()
+  const list = s.loadSchema('c')
+  assert.equal(f.requests.length, 1)
+  assert.equal(f.requests[0].database, undefined)
+  f.requests[0].resolve(databaseList(['a', 'b']))
+  await list
+  const selected = s.loadSchema('c', 'a', false)
+  assert.equal(f.requests[1].database, 'a')
+  f.requests[1].resolve(tableList('a'))
+  await selected
+  await s.loadSchema('c', 'a', false)
+  assert.equal(f.requests.length, 2)
+  const dbs = f.store.getState().schema.c.databases
+  assert.equal(dbs[0].tablesLoaded, true)
+  assert.equal(dbs[1].tablesLoaded, false)
+  assert.deepEqual(dbs[1].tables, [])
+})
+test('schema requests for the same database are deduplicated while loading', async () => {
+  const f = schemaFixture(),
+    s = f.store.getState()
+  const one = s.loadSchema('c', 'a', false),
+    two = s.loadSchema('c', 'a', false)
+  assert.equal(f.requests.length, 1)
+  assert.equal(f.store.getState().schemaLoading[f.key('a')], true)
+  f.requests[0].resolve(tableList('a', []))
+  await Promise.all([one, two])
+  await s.loadSchema('c', 'a', false)
+  assert.equal(f.requests.length, 1, 'an empty loaded database must be cached too')
+  assert.equal(f.store.getState().schemaLoading[f.key('a')], false)
+})
+test('out-of-order database loads merge rather than replacing the entire catalog', async () => {
+  const f = schemaFixture(),
+    s = f.store.getState()
+  const list = s.loadSchema('c')
+  f.requests[0].resolve(databaseList(['a', 'b']))
+  await list
+  const a = s.loadSchema('c', 'a', false),
+    b = s.loadSchema('c', 'b', false)
+  f.requests[2].resolve(tableList('b', ['b_table']))
+  await b
+  f.requests[1].resolve(tableList('a', ['a_table']))
+  await a
+  assert.deepEqual(
+    f.store.getState().schema.c.databases.map((db) => [db.name, db.tables[0].name]),
+    [
+      ['a', 'a_table'],
+      ['b', 'b_table']
+    ]
+  )
+})
+test('refreshing database names preserves loaded tables and removes dropped databases', async () => {
+  const f = schemaFixture(),
+    s = f.store.getState()
+  const a = s.loadSchema('c', 'a')
+  f.requests[0].resolve(tableList('a'))
+  await a
+  const list = s.loadSchema('c')
+  f.requests[1].resolve(databaseList(['a', 'b']))
+  await list
+  assert.equal(f.store.getState().schema.c.databases[0].tables[0].name, 'orders')
+  const refresh = s.loadSchema('c')
+  f.requests[2].resolve(databaseList(['b']))
+  await refresh
+  assert.deepEqual(
+    f.store.getState().schema.c.databases.map((db) => db.name),
+    ['b']
+  )
+})
+test('explicit table refresh bypasses cache and metadata failures remain retryable', async () => {
+  const f = schemaFixture(),
+    s = f.store.getState()
+  const first = s.loadSchema('c', 'a', false)
+  f.requests[0].reject(new Error('access denied'))
+  await first
+  assert.match(f.store.getState().schemaErrors[f.key('a')], /access denied/)
+  const retry = s.loadSchema('c', 'a', false)
+  f.requests[1].resolve(tableList('a'))
+  await retry
+  assert.equal(f.store.getState().schemaErrors[f.key('a')], undefined)
+  const refresh = s.loadSchema('c', 'a')
+  f.requests[2].resolve(tableList('a', ['new_table']))
+  await refresh
+  assert.equal(f.store.getState().schema.c.databases[0].tables[0].name, 'new_table')
+})
+test('disconnect invalidation prevents stale responses from replacing reconnected metadata', async () => {
+  const f = schemaFixture(),
+    s = f.store.getState()
+  const old = s.loadSchema('c', 'a')
+  s.clearSchema('c')
+  const fresh = s.loadSchema('c', 'a')
+  f.requests[1].resolve(tableList('a', ['fresh_table']))
+  await fresh
+  f.requests[0].resolve(tableList('a', ['stale_table']))
+  await old
+  assert.equal(f.store.getState().schema.c.databases[0].tables[0].name, 'fresh_table')
+  assert.equal(f.store.getState().schemaLoading[f.key('a')], false)
+})
+test('disconnected connections never fetch schema', async () => {
+  const f = schemaFixture()
+  f.connectionState.statuses.c = 'disconnected'
+  await f.store.getState().loadSchema('c', 'a')
+  assert.equal(f.requests.length, 0)
 })

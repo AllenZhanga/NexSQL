@@ -1,4 +1,5 @@
 import type { QueryBatchResult, QueryProgress } from '@shared/types/query'
+import type { ConnectionImportPreview } from '@shared/types/connectionImport'
 import type {
   ConnectionConfig,
   ConnectionFormData,
@@ -27,6 +28,7 @@ declare global {
           ): Promise<QueryBatchResult>
           cancelQuery(executionId: string): Promise<boolean>
           onQueryProgress(callback: (progress: QueryProgress) => void): () => void
+          onRefreshData(callback: () => void): () => void
           listConnections(): Promise<ConnectionConfig[]>
           addConnection(formData: ConnectionFormData): Promise<ConnectionConfig>
           updateConnection(
@@ -93,7 +95,8 @@ declare global {
           updateRedisKey(request: RedisKeyUpdateRequest): Promise<RedisKeyDetail>
           duplicateConnection(id: string): Promise<ConnectionConfig>
           exportConnections(): Promise<string>
-          importConnections(jsonStr: string): Promise<number>
+          previewConnectionImport(content: string): Promise<ConnectionImportPreview>
+          importConnections(content: string, selectedIndices?: number[]): Promise<number>
         }
     ai:
       | undefined

@@ -1,4 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useUIStore } from '@renderer/stores/uiStore'
+import { delimitedText } from '../results/resultData'
+import { downloadText } from '../transfer/sqlTransfer'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { RefreshCw, Plus, Save, Copy, Search, ChevronLeft, ChevronRight, X, Filter, Download, Trash2, Database, Rows3, HardDrive, Info, Braces, Settings2 } from 'lucide-react'
 import { TableDesigner } from '@renderer/components/designer/TableDesigner'
@@ -92,6 +95,10 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
   const [showDetailsPanel, setShowDetailsPanel] = useState(true)
   const [jsonViewField, setJsonViewField] = useState<{ name: string; value: string } | null>(null)
   const [showDesigner, setShowDesigner] = useState(false)
+  const [showShortcuts, setShowShortcuts] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const filterRef = useRef<HTMLInputElement>(null)
+  const selectionAnchor = useRef<string | null>(null)
 
   const dbType = connection?.type ?? 'mysql'
   const pkColumns = useMemo(
@@ -140,7 +147,9 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
   const loadRows = async (overrides?: Partial<TableViewState>): Promise<void> => {
     if (!tab.connectionId || !tab.tableName || !window.db) return
 
-    const currentView = tab.tableView ?? emptyTableView()
+    const currentTab = useQueryStore.getState().tabs.find(item => item.id === tab.id)
+    if (currentTab?.isLoading) return
+    const currentView = currentTab?.tableView ?? emptyTableView()
     const nextPage = overrides?.page ?? currentView.page
     const nextPageSize = overrides?.pageSize ?? currentView.pageSize
     const nextFilter = overrides?.filterText ?? currentView.filterText
@@ -184,6 +193,8 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         window.db.executeQuery(tab.connectionId, countSql, tab.selectedDatabase ?? undefined)
       ])
 
+      if (dataResult.error) throw new Error(dataResult.error)
+      if (countResult.error) throw new Error(countResult.error)
       const totalRows = Number(countResult.rows[0]?.total ?? countResult.rows[0]?.TOTAL ?? 0)
 
       updateTableView(tab.id, (view) => ({
@@ -499,6 +510,8 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
     if (event.button !== 0 || isInteractiveTarget(event.target)) return
 
     event.preventDefault()
+    rootRef.current?.focus({ preventScroll: true })
+    selectionAnchor.current = displayRow.key
     setRowMenu(null)
 
     if (event.shiftKey && activeRowKey && rowIndexByKey.has(activeRowKey)) {
@@ -571,7 +584,9 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
 
   const commitChanges = async (): Promise<void> => {
     if (!tab.connectionId || !tab.tableName || !window.db) return
-    const view = tab.tableView ?? emptyTableView()
+    const currentTab = useQueryStore.getState().tabs.find(item => item.id === tab.id)
+    if (currentTab?.isLoading || !currentTab?.hasPendingChanges) return
+    const view = currentTab.tableView ?? emptyTableView()
     patchTab(tab.id, { isLoading: true, error: null })
 
     try {
@@ -621,7 +636,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         pendingInserts: [],
         pendingDeletes: {}
       }))
-      patchTab(tab.id, { hasPendingChanges: false })
+      patchTab(tab.id, { hasPendingChanges: false, isLoading: false })
       setEditingCell(null)
       await loadRows()
     } catch (err) {
@@ -718,23 +733,15 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
 
   const exportFilteredCsv = async (): Promise<void> => {
     if (!tab.connectionId || !tab.tableName || !window.db) return
-    const whereClause = buildCombinedWhere(
-      tableView.columns,
-      tableView.filterText,
-      tableView.columnFilters ?? [],
-      dbType
-    )
-    const orderBy = buildOrderByClause(tableView.sortRules, dbType)
-    const sql = `SELECT * FROM ${quoteIdentifier(dbType, tab.tableName)}${whereClause}${orderBy}`
-    const result = await window.db.executeQuery(tab.connectionId, sql, tab.selectedDatabase ?? undefined)
-    if (result.error) {
-      patchTab(tab.id, { error: result.error })
-      return
-    }
-    downloadCsv(
-      `${tab.tableName ?? 'table'}-filtered.csv`,
-      rowsToCsv(tableView.columns, result.rows)
-    )
+    try {
+      const whereClause = buildCombinedWhere(tableView.columns, tableView.filterText, tableView.columnFilters ?? [], dbType)
+      const orderBy = buildOrderByClause(tableView.sortRules, dbType)
+      const sql = `SELECT * FROM ${quoteIdentifier(dbType, tab.tableName)}${whereClause}${orderBy}`
+      const batch = await window.db.executeBatch(crypto.randomUUID(), tab.connectionId, sql, tab.selectedDatabase ?? undefined)
+      const result = batch.results[0]
+      if (batch.status !== 'completed' || !result || result.error) throw new Error(result?.error ?? batch.error ?? '读取筛选结果失败')
+      downloadCsv(`${tab.tableName ?? 'table'}-filtered.csv`, rowsToCsv(tableView.columns, result.rows))
+    } catch (error) { patchTab(tab.id, {error: error instanceof Error ? error.message : String(error)}) }
   }
 
   const copySelectedInsertSql = async (rows: DisplayRow[]): Promise<void> => {
@@ -758,75 +765,75 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
 
   const canEditSelectedRow = !!selectedDisplayRow && !selectedDisplayRow.isPendingDelete && (selectedDisplayRow.isNew || hasPrimaryKey)
 
+  const activeTable = (): boolean => {
+    const ui = useUIStore.getState()
+    return useQueryStore.getState().activeTabId === tab.id && ui.windowTab === 'workspace' &&
+      !ui.showConnectionDialog && !ui.showSettings && !ui.showAppSettings && !showDesigner && !jsonViewField && !document.querySelector('dialog[open]')
+  }
+  const refreshData = (): void => {
+    if (!activeTable() || useQueryStore.getState().tabs.find(item => item.id === tab.id)?.isLoading) return
+    setEditingCell(null)
+    void loadRows()
+  }
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
+      if (!activeTable() || event.defaultPrevented) return
       const target = event.target as HTMLElement
-      const isInputFocused =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        target.isContentEditable
-      if (isInputFocused) return
-
+      const key = event.key.toLowerCase()
       const isMeta = event.metaKey || event.ctrlKey
-
-      // Cmd/Ctrl+R: Refresh
-      if (isMeta && event.key === 'r') {
+      const editable = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable
+      if ((isMeta && key === 'r' && !event.shiftKey && !event.altKey) || event.key === 'F5') {
+        event.preventDefault(); if (!event.repeat) refreshData(); return
+      }
+      if (isMeta && key === 'f' && !event.altKey) {
+        event.preventDefault(); filterRef.current?.focus(); filterRef.current?.select(); return
+      }
+      if (isMeta && (key === 's' || event.key === 'Enter') && !event.altKey && !event.shiftKey) {
+        event.preventDefault(); if (!event.repeat) { setEditingCell(null); void commitChanges() }; return
+      }
+      if (tab.isLoading || event.repeat || editable || !rootRef.current?.contains(target)) return
+      if (isMeta && event.altKey && key === 'n') { event.preventDefault(); addDraftRow(); return }
+      if (isMeta && key === 'a') { event.preventDefault(); setSelectedRowKeys(displayRows.map(row => row.key)); return }
+      if (isMeta && key === 'c' && selectedDisplayRows.length) {
         event.preventDefault()
-        void loadRows()
+        void copyTextSilent(delimitedText(tableView.columns.map(c => c.name), selectedDisplayRows.map(({ row }) => tableView.columns.map(c => row[c.name])), '\t'))
         return
       }
-
-      // Cmd/Ctrl+S: Commit changes
-      if (isMeta && event.key === 's') {
-        event.preventDefault()
-        if (tab.hasPendingChanges && !tab.isLoading) {
-          void commitChanges()
-        }
-        return
+      if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.preventDefault(); const page = event.key === 'ArrowLeft' ? Math.max(1, tableView.page - 1) : Math.min(totalPages, tableView.page + 1)
+        if (page !== tableView.page) void loadRows({ page }); return
       }
-
-      // Delete: Mark selected rows for delete (needs a primary key)
-      if (event.key === 'Delete') {
-        if (!hasPrimaryKey) return
-        if (selectedDisplayRows.length > 0) {
-          event.preventDefault()
-          markRowsForDelete(selectedDisplayRows)
-        }
-        return
+      if (event.key === 'F2' && canEditSelectedRow && selectedDisplayRow) {
+        event.preventDefault(); const column = tableView.columns.find(c => selectedDisplayRow.isNew || !c.primaryKey)
+        if (column) setEditingCell({ rowKey: selectedDisplayRow.key, columnName: column.name }); return
       }
-
-      // Arrow Up/Down: Navigate rows
-      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
-        event.preventDefault()
-        const currentIndex = activeRowKey != null ? (rowIndexByKey.get(activeRowKey) ?? -1) : -1
-        const nextIndex =
-          event.key === 'ArrowUp'
-            ? Math.max(0, currentIndex - 1)
-            : Math.min(displayRows.length - 1, currentIndex + 1)
-        if (nextIndex !== currentIndex) {
-          const nextKey = displayRows[nextIndex].key
-          setSelectedRowKeys([nextKey])
-          setActiveRowKey(nextKey)
-        }
-        return
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        if (hasPrimaryKey && selectedDisplayRows.length) { event.preventDefault(); markRowsForDelete(selectedDisplayRows) }; return
       }
-
-      // Escape: Close context menu
-      if (event.key === 'Escape') {
-        setRowMenu(null)
-        return
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && displayRows.length) {
+        event.preventDefault(); const current = activeRowKey != null ? (rowIndexByKey.get(activeRowKey) ?? -1) : -1
+        const next = Math.max(0, Math.min(displayRows.length - 1, current + (event.key === 'ArrowUp' ? -1 : 1)))
+        const nextKey = displayRows[next].key
+        if (!event.shiftKey) selectionAnchor.current = nextKey
+        const anchor = selectionAnchor.current ?? activeRowKey ?? nextKey
+        if (event.shiftKey && !selectionAnchor.current) selectionAnchor.current = anchor
+        setSelectedRowKeys(event.shiftKey ? getRowRangeKeys(displayRows, rowIndexByKey, anchor, nextKey) : [nextKey]); setActiveRowKey(nextKey)
+        rootRef.current?.querySelectorAll('tbody tr')[next]?.scrollIntoView({ block: 'nearest' }); return
       }
+      if (event.key === 'Escape') { setRowMenu(null); setShowShortcuts(false); setSelectedRowKeys([]) }
     }
-
     window.addEventListener('keydown', handleKeyDown)
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [selectedDisplayRows, activeRowKey, rowIndexByKey, displayRows, tab.hasPendingChanges, tab.isLoading, hasPrimaryKey])
+    const unsubscribe = window.db?.onRefreshData?.(refreshData)
+    return () => { window.removeEventListener('keydown', handleKeyDown); unsubscribe?.() }
+  })
 
   return (
-    <div className="flex flex-col h-full bg-app-bg">
+    <div ref={rootRef} onCopy={event => {
+      const target = event.target as HTMLElement
+      if (!rootRef.current?.contains(target) || !selectedDisplayRows.length || target.closest('input, textarea, [contenteditable="true"]')) return
+      event.preventDefault()
+      event.clipboardData.setData('text/plain', delimitedText(tableView.columns.map(c => c.name), selectedDisplayRows.map(({row}) => tableView.columns.map(c => row[c.name])), '\t'))
+    }} tabIndex={-1} className="flex flex-col h-full bg-app-bg">
       <div className="flex items-center justify-between px-4 py-3 bg-app-sidebar border-b border-app-border shrink-0 gap-3">
         <div className="min-w-0 flex items-center gap-2">
           <div className="min-w-0">
@@ -850,6 +857,8 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
           </button>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <button title="刷新数据（⌘/Ctrl+R 或 F5）" disabled={tab.isLoading} onClick={refreshData} className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-app-border disabled:opacity-40"><RefreshCw size={12} />刷新</button>
+          <button title="查看表数据页快捷键" onClick={() => setShowShortcuts(v => !v)} className="px-3 py-1.5 text-xs rounded border border-app-border">快捷键</button>
           <button
             onClick={() => setShowDesigner(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors"
@@ -885,10 +894,12 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         </div>
       </div>
 
+      {showShortcuts && <div className="px-4 py-2 text-xs text-text-secondary border-b border-app-border flex flex-wrap gap-x-5 gap-y-2" role="region" aria-label="表数据快捷键"><span>⌘/Ctrl+R 或 F5：刷新</span><span>⌘/Ctrl+F：筛选</span><span>⌘/Ctrl+S 或 ⌘/Ctrl+Enter：提交</span><span>⌘/Ctrl+Alt+N：新增行</span><span>⌘/Ctrl+A：选当前页</span><span>⌘/Ctrl+C：复制 TSV</span><span>F2：编辑</span><span>Shift+↑/↓：连选</span><span>Alt+←/→：翻页</span><span>Delete：标记删除</span><span>Esc：取消选择</span></div>}
       <div className="flex items-center gap-2 px-4 py-2 bg-app-bg border-b border-app-border shrink-0 flex-wrap">
         <div className="relative min-w-[260px] flex-1 max-w-[420px]">
           <Filter size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted" />
           <input
+            ref={filterRef}
             type="text"
             value={filterInput}
             onChange={(e) => setFilterInput(e.target.value)}
@@ -925,7 +936,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         <button
           onClick={exportCurrentPageCsv}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors"
-          title="导出当前页 CSV"
+          title="导出当前页已保存数据 CSV（不含未提交修改）"
         >
           <Download size={12} />
           导出当前页
@@ -933,7 +944,7 @@ export function TableDataView({ tab }: TableDataViewProps): JSX.Element {
         <button
           onClick={() => void exportFilteredCsv()}
           className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded border border-app-border text-text-secondary hover:text-text-primary hover:border-accent-blue transition-colors"
-          title="导出当前筛选结果 CSV"
+          title="导出当前筛选结果的已保存数据 CSV"
         >
           <Download size={12} />
           导出筛选结果
@@ -1719,17 +1730,11 @@ function rowsToCsv(columns: SchemaColumn[], rows: Record<string, unknown>[]): st
 }
 
 function csvEscape(value: string): string {
-  return value.includes(',') || value.includes('"') || value.includes('\n')
+  return /[,"\r\n]/.test(value)
     ? `"${value.replace(/"/g, '""')}"`
     : value
 }
 
 function downloadCsv(filename: string, csv: string): void {
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  link.click()
-  URL.revokeObjectURL(url)
+  downloadText(filename, '\uFEFF' + csv, 'text/csv;charset=utf-8;')
 }

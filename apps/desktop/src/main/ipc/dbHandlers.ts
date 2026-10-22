@@ -1,5 +1,6 @@
 import { executeBatch, cancelQuery } from '../db/QueryRunner'
 import { ipcMain } from 'electron'
+import { randomUUID } from 'node:crypto'
 import type { ConnectionFormData } from '@shared/types/connection'
 import {
   listConnections,
@@ -11,7 +12,8 @@ import {
   disconnectById,
   duplicateConnection,
   exportConnections,
-  importConnections
+  importConnections,
+  previewConnectionImport
 } from '../db/ConnectionManager'
 import {
   executeQuery,
@@ -24,7 +26,6 @@ import {
   getTableDDL,
   exportTableSQL,
   exportDatabaseSQL,
-  importDatabaseSQL,
   createDatabase,
   dropDatabase,
   alterDatabaseCharset
@@ -132,8 +133,10 @@ export function registerDbHandlers(): void {
 
   ipcMain.handle(
     'db:importDatabaseSQL',
-    async (_event, connectionId: string, sql: string, database?: string) => {
-      return importDatabaseSQL(connectionId, sql, database)
+    async (event, connectionId: string, sql: string, database?: string) => {
+      const result = await executeBatch(event.sender, randomUUID(), connectionId, sql, database)
+      if (result.status !== 'completed') throw new Error(result.error ?? '导入未完成')
+      return result.totalStatements
     }
   )
 
@@ -181,8 +184,12 @@ export function registerDbHandlers(): void {
     return exportConnections()
   })
 
-  ipcMain.handle('db:importConnections', async (_event, jsonStr: string) => {
-    return importConnections(jsonStr)
+  ipcMain.handle('db:previewConnectionImport', async (_event, content: string) => {
+    return previewConnectionImport(content)
+  })
+
+  ipcMain.handle('db:importConnections', async (_event, content: string, selectedIndices?: number[]) => {
+    return importConnections(content, selectedIndices)
   })
 
   ipcMain.handle(

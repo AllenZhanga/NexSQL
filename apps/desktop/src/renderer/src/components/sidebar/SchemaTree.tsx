@@ -1,12 +1,14 @@
-import { useState } from 'react'
+import { SQLTransferDialog } from '../transfer/SQLTransferDialog'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronRight, ChevronDown, Table2, Eye, Columns, Database, Key, RefreshCw, Search, X, Plus, Languages, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useT } from '@renderer/stores/i18nStore'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
-import { useQueryStore } from '@renderer/stores/queryStore'
+import { schemaRequestKey, useQueryStore } from '@renderer/stores/queryStore'
 import { TableDesigner } from '@renderer/components/designer/TableDesigner'
 import type { DBType } from '@shared/types/connection'
-import type { SchemaTable, SchemaColumn } from '@shared/types/query'
+import type { SchemaTable, SchemaColumn, DatabaseInfo } from '@shared/types/query'
 
 function quoteIdentifierByType(dbType: DBType, name: string): string {
   if (dbType === 'mssql') return `[${name.replace(/]/g, ']]')}]`
@@ -51,12 +53,14 @@ function ContextMenu({
   menu,
   onClose,
   onDesign,
-  onRefreshSchema
+  onRefreshSchema,
+  onTransfer
 }: {
   menu: CtxMenu
   onClose: () => void
   onDesign: () => void
   onRefreshSchema: () => void
+  onTransfer: (action: 'import' | 'export') => void
 }): JSX.Element {
   const { connections } = useConnectionStore()
   const { openTableTab, newTab, updateTabSQL, updateTabConnection, updateTabDatabase, setActiveTab } = useQueryStore()
@@ -92,16 +96,6 @@ function ContextMenu({
 
   const handleCount = (): void => {
     openInNewTab(`SELECT COUNT(*) AS total FROM ${qt(menu.table.name)};`)
-  }
-
-  const handleExportSQL = async (): Promise<void> => {
-    if (!window.db) return
-    try {
-      const sql = await window.db.exportTableSQL(menu.connectionId, menu.table.name, menu.database)
-      openInNewTab(sql)
-    } catch (e) {
-      openInNewTab(`-- 导出失败: ${e}`)
-    }
   }
 
   const handleDesign = (): void => {
@@ -159,7 +153,8 @@ function ContextMenu({
     { divider: true },
     { label: '设计表 (字段/索引/DDL)', icon: '⊞', action: handleDesign },
     { divider: true },
-    { label: '导出数据为 INSERT SQL', icon: '↑', action: handleExportSQL },
+    { label: '导出表（SQL 文件）', icon: '↑', action: () => { onTransfer('export'); onClose() } },
+    { label: '导入表（SQL 文件）', icon: '↓', action: () => { onTransfer('import'); onClose() } },
     { divider: true },
     { label: '清空表', icon: '⊘', action: () => setConfirm('truncate'), danger: true },
     { label: '删除表', icon: '✕', action: () => setConfirm('drop'), danger: true },
@@ -170,7 +165,7 @@ function ContextMenu({
       <div className="fixed inset-0 z-40" onClick={onClose} />
       <div
         className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 min-w-[200px] text-xs"
-        style={{ top: menu.y, left: menu.x }}
+        style={{ top: Math.min(menu.y, window.innerHeight - 380), left: Math.min(menu.x, window.innerWidth - 240) }}
       >
         <div className="px-3 py-1 text-text-muted text-2xs border-b border-app-border mb-1 truncate">
           {menu.table.name}
@@ -524,7 +519,7 @@ function TableNode({
   const [expanded, setExpanded] = useState(false)
   const [columns, setColumns] = useState<SchemaColumn[]>(table.columns)
   const [loading, setLoading] = useState(false)
-  const { openTableTab } = useQueryStore()
+  const openTableTab = useQueryStore(state => state.openTableTab)
 
   const handleToggle = async (): Promise<void> => {
     const next = !expanded
@@ -624,38 +619,40 @@ function DatabaseNode({
   db,
   depth,
   connectionId,
-  defaultExpanded,
+  expanded,
+  onToggle,
   filter,
   onOpenDatabase,
   onDropDatabase,
   onCreateTable,
   onAlterCharset
 }: {
-  db: { name: string; tables: SchemaTable[] }
+  db: DatabaseInfo
   depth: number
   connectionId: string
-  defaultExpanded: boolean
+  expanded: boolean
+  onToggle: () => void
   filter: string
   onOpenDatabase: (connectionId: string, database: string) => void
   onDropDatabase: (connectionId: string, database: string) => void
   onCreateTable: (connectionId: string, database: string) => void
   onAlterCharset: (connectionId: string, database: string) => void
 }): JSX.Element {
-  const { loadSchema } = useQueryStore()
+  const loadSchema = useQueryStore(state => state.loadSchema)
   const { connections } = useConnectionStore()
   const dbType = connections.find((c) => c.id === connectionId)?.type ?? 'mysql'
-  const hasFilter = filter.trim().length > 0
-  const visibleTables = hasFilter
-    ? db.tables.filter((t) => t.name.toLowerCase().includes(filter.toLowerCase()))
+  const hasFilter = expanded && filter.trim().length > 0
+  const visibleTables = !expanded ? [] : hasFilter
+    ? db.tables.filter(t => t.name.toLowerCase().includes(filter.trim().toLowerCase()))
     : db.tables
-
-  // Auto-expand when searching
-  const [manualExpanded, setManualExpanded] = useState(defaultExpanded)
-  const expanded = hasFilter ? visibleTables.length > 0 : manualExpanded
+  const requestKey = schemaRequestKey(connectionId, db.name)
+  const loading = useQueryStore(state => state.schemaLoading[requestKey])
+  const loadError = useQueryStore(state => state.schemaErrors[requestKey])
 
   const [contextMenu, setContextMenu] = useState<CtxMenu | null>(null)
   const [dbContextMenu, setDbContextMenu] = useState<DbCtxMenu | null>(null)
   const [designer, setDesigner] = useState<SchemaTable | null>(null)
+  const [transfer, setTransfer] = useState<{ action: 'import' | 'export'; table: string } | null>(null)
 
   const handleCtx = (e: React.MouseEvent, table: SchemaTable): void => {
     e.preventDefault()
@@ -669,7 +666,6 @@ function DatabaseNode({
     setDbContextMenu({ x: e.clientX, y: e.clientY, connectionId, database: db.name })
   }
 
-  if (hasFilter && visibleTables.length === 0) return <></>
 
   return (
     <div>
@@ -680,7 +676,9 @@ function DatabaseNode({
         title="点击数据库查看概览，右键可进行管理操作"
       >
         <button
-          onClick={() => setManualExpanded((v) => !v)}
+          onClick={onToggle}
+          aria-label={`${expanded ? '收起' : '展开'}数据库 ${db.name}`}
+          aria-expanded={expanded}
           className="shrink-0 rounded p-0.5 hover:bg-app-active"
           title={expanded ? '收起' : '展开'}
         >
@@ -688,14 +686,15 @@ function DatabaseNode({
         </button>
         <button
           onClick={() => onOpenDatabase(connectionId, db.name)}
-          onDoubleClick={() => setManualExpanded((v) => !v)}
           className="min-w-0 flex-1 flex items-center gap-1 text-left"
         >
           <Database size={11} className="text-accent-blue shrink-0" />
           <span className="truncate">{db.name}</span>
         </button>
-        <span className="text-2xs text-text-muted ml-auto shrink-0">{hasFilter ? `${visibleTables.length}/${db.tables.length}` : db.tables.length}</span>
+        <span className="text-2xs text-text-muted ml-auto shrink-0">{loading ? '加载中…' : !db.tablesLoaded ? '未加载' : hasFilter ? `${visibleTables.length}/${db.tables.length}` : db.tables.length}</span>
       </div>
+      {expanded && loadError && <div role="alert" className="px-5 py-2 text-xs text-accent-red break-words">{loadError}<button className="ml-2 underline" onClick={() => void loadSchema(connectionId, db.name)}>重试</button></div>}
+      {expanded && !loading && !loadError && db.tablesLoaded && visibleTables.length === 0 && <div className="px-6 py-2 text-xs text-text-muted">{hasFilter ? '当前库没有匹配的表' : '当前库暂无数据表'}</div>}
       {expanded && visibleTables.map((table) => (
         <TableNode
           key={table.name}
@@ -715,9 +714,11 @@ function DatabaseNode({
             setDesigner(contextMenu.table)
             setContextMenu(null)
           }}
+          onTransfer={action => setTransfer({ action, table: contextMenu.table.name })}
           onRefreshSchema={() => loadSchema(connectionId, db.name)}
         />
       )}
+      {transfer && <SQLTransferDialog action={transfer.action} target={{ connectionId, database: db.name, dbType, tables: [transfer.table] }} onClose={() => setTransfer(null)} onImported={() => loadSchema(connectionId, db.name)} />}
       {designer && (
         <TableDesigner
           connectionId={connectionId}
@@ -746,6 +747,8 @@ function SchemaConnectionNode({
   connectionName,
   databases,
   isActive,
+  activeDatabase,
+  onToggleDatabase,
   filter,
   onCreateDatabase,
   onOpenDatabase,
@@ -755,8 +758,10 @@ function SchemaConnectionNode({
 }: {
   connectionId: string
   connectionName: string
-  databases: { name: string; tables: SchemaTable[] }[]
+  databases: DatabaseInfo[]
   isActive: boolean
+  activeDatabase: string | null
+  onToggleDatabase: (connectionId: string, database: string) => void
   filter: string
   onCreateDatabase: (connectionId: string) => void
   onOpenDatabase: (connectionId: string, database: string) => void
@@ -764,6 +769,10 @@ function SchemaConnectionNode({
   onDropDatabase: (connectionId: string, database: string) => void
   onAlterCharset: (connectionId: string, database: string) => void
 }): JSX.Element {
+  const requestKey = schemaRequestKey(connectionId)
+  const loading = useQueryStore(state => state.schemaLoading[requestKey])
+  const loadError = useQueryStore(state => state.schemaErrors[requestKey])
+  const loadSchema = useQueryStore(state => state.loadSchema)
   const [expanded, setExpanded] = useState(true)
 
   return (
@@ -797,13 +806,16 @@ function SchemaConnectionNode({
           <Plus size={11} />
         </span>
       </button>
+      {expanded && loading && !databases.length && <div role="status" className="px-6 py-2 text-xs text-text-muted">正在加载数据库列表…</div>}
+      {expanded && loadError && <div role="alert" className="px-5 py-2 text-xs text-accent-red">{loadError}<button className="ml-2 underline" onClick={() => void loadSchema(connectionId)}>重试</button></div>}
       {expanded && databases.map((db) => (
         <DatabaseNode
           key={db.name}
           db={db}
           depth={1}
           connectionId={connectionId}
-          defaultExpanded={databases.length === 1}
+          expanded={activeDatabase === db.name}
+          onToggle={() => onToggleDatabase(connectionId, db.name)}
           filter={filter}
           onOpenDatabase={onOpenDatabase}
           onDropDatabase={onDropDatabase}
@@ -817,8 +829,12 @@ function SchemaConnectionNode({
 
 // ──────────────────── SchemaTree (root) ────────────────────
 export function SchemaTree(): JSX.Element {
+  const t = useT()
   const { connections, statuses, activeConnectionId } = useConnectionStore()
-  const { schema, loadSchema, openDatabaseTab } = useQueryStore()
+  const schema = useQueryStore(state => state.schema)
+  const loadSchema = useQueryStore(state => state.loadSchema)
+  const openDatabaseTab = useQueryStore(state => state.openDatabaseTab)
+  const [expandedDatabase, setExpandedDatabase] = useState<{ connectionId: string; database: string } | null>(null)
   const [filter, setFilter] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [dialog, setDialog] = useState<SchemaDialog>({ type: 'none' })
@@ -828,10 +844,31 @@ export function SchemaTree(): JSX.Element {
     (c) => c.type !== 'redis' && (statuses[c.id] ?? 'disconnected') === 'connected'
   )
 
+  useEffect(() => {
+    if (expandedDatabase && (statuses[expandedDatabase.connectionId] !== 'connected' ||
+        (schema[expandedDatabase.connectionId] && !schema[expandedDatabase.connectionId].databases.some(db => db.name === expandedDatabase.database)))) {
+      setExpandedDatabase(null)
+      setFilter('')
+    }
+  }, [statuses, schema, expandedDatabase])
+
+  const selectDatabase = (connectionId: string, database: string): void => {
+    setExpandedDatabase({connectionId, database})
+    setFilter('')
+    void loadSchema(connectionId, database, false)
+  }
+  const toggleDatabase = (connectionId: string, database: string): void => {
+    if (expandedDatabase?.connectionId === connectionId && expandedDatabase.database === database) {
+      setExpandedDatabase(null); setFilter('')
+    } else selectDatabase(connectionId, database)
+  }
+
   const handleRefreshAll = async (): Promise<void> => {
     setRefreshing(true)
     try {
       await Promise.all(connectedConnections.map((c) => loadSchema(c.id)))
+      if (expandedDatabase && useQueryStore.getState().getSchema(expandedDatabase.connectionId)?.databases.some(db => db.name === expandedDatabase.database))
+        await loadSchema(expandedDatabase.connectionId, expandedDatabase.database)
     } finally {
       setRefreshing(false)
     }
@@ -872,6 +909,7 @@ export function SchemaTree(): JSX.Element {
   }
 
   const handleOpenDatabase = (connectionId: string, database: string): void => {
+    selectDatabase(connectionId, database)
     openDatabaseTab(connectionId, database)
   }
 
@@ -933,36 +971,39 @@ export function SchemaTree(): JSX.Element {
     }
   }
 
-  if (connectedConnections.length === 0) return <></>
 
   return (
-    <div className="py-1 border-t border-app-border mt-2">
+    <section className="h-full min-h-0 flex flex-col" aria-label={t('sidebar.schema')}>
       {/* Header row: title + refresh */}
-      <div className="flex items-center justify-between px-3 py-1">
-        <span className="text-2xs text-text-muted uppercase tracking-wider font-semibold">数据库结构</span>
+      <div className="flex items-center justify-between px-3 pt-2 pb-1.5 shrink-0">
+        <span className="text-2xs text-text-muted uppercase tracking-wider font-semibold">{t('sidebar.schema')}</span>
         <button
           onClick={handleRefreshAll}
-          title="刷新所有 Schema"
-          className="p-0.5 rounded text-text-muted hover:text-text-primary hover:bg-app-hover transition-colors"
+          disabled={refreshing || connectedConnections.length === 0}
+          title="刷新数据库列表和当前展开的库"
+          className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-app-hover transition-colors disabled:opacity-40"
         >
           <RefreshCw size={11} className={refreshing ? 'animate-spin' : ''} />
         </button>
       </div>
 
       {/* Search box */}
-      <div className="px-2 pb-1">
+      <div className="px-2 pb-2 shrink-0">
         <div className="relative">
           <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
           <input
             type="text"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="搜索数据表..."
-            className="w-full bg-app-input border border-app-border rounded pl-6 pr-6 py-1 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-blue transition-colors"
+            disabled={!expandedDatabase}
+            aria-label={t('sidebar.searchTablesLabel')}
+            placeholder={expandedDatabase ? t('sidebar.searchTables').replace('{database}', expandedDatabase.database) : t('sidebar.chooseDatabase')}
+            className="w-full bg-app-input border border-app-border rounded-md pl-6 pr-6 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-blue transition-colors"
           />
           {filter && (
             <button
               onClick={() => setFilter('')}
+              aria-label="清空表搜索"
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
             >
               <X size={11} />
@@ -971,25 +1012,30 @@ export function SchemaTree(): JSX.Element {
         </div>
       </div>
 
-      {connectedConnections.map((conn) => {
-        const s = schema[conn.id]
-        return (
-          <SchemaConnectionNode
-            key={conn.id}
-            connectionId={conn.id}
-            connectionName={conn.name}
-            databases={s?.databases ?? []}
-            isActive={activeConnectionId === conn.id}
-            filter={filter}
-            onCreateDatabase={handleCreateDatabase}
-            onOpenDatabase={handleOpenDatabase}
-            onCreateTable={handleCreateTable}
-            onDropDatabase={handleDropDatabase}
-            onAlterCharset={handleAlterDatabaseCharset}
-          />
-        )
-      })}
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pb-1" data-testid="schema-tree-scroll">
+      {connectedConnections.length === 0 && <div className="px-4 py-6 text-center text-xs text-text-muted">{t('sidebar.connectForSchema')}</div>}
+        {connectedConnections.map((conn) => {
+          const s = schema[conn.id]
+          return (
+            <SchemaConnectionNode
+              key={conn.id}
+              connectionId={conn.id}
+              connectionName={conn.name}
+              databases={s?.databases ?? []}
+              isActive={activeConnectionId === conn.id}
+              activeDatabase={expandedDatabase?.connectionId === conn.id ? expandedDatabase.database : null}
+              onToggleDatabase={toggleDatabase}
+              filter={filter}
+              onCreateDatabase={handleCreateDatabase}
+              onOpenDatabase={handleOpenDatabase}
+              onCreateTable={handleCreateTable}
+              onDropDatabase={handleDropDatabase}
+              onAlterCharset={handleAlterDatabaseCharset}
+            />
+          )
+        })}
 
+      </div>
       <SchemaActionDialog
         dialog={dialog}
         submitting={submitting}
@@ -997,6 +1043,6 @@ export function SchemaTree(): JSX.Element {
         onChange={handleDialogChange}
         onSubmit={handleDialogSubmit}
       />
-    </div>
+    </section>
   )
 }
