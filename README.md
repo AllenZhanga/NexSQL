@@ -51,7 +51,7 @@ NexSQL 将数据库连接、SQL 编辑、查询结果和表数据管理放在同
 - 连接分组、标签、测试连接，以及 NexSQL JSON 连接配置导入 / 导出。
 - MySQL、PostgreSQL、SQL Server 和 Redis 支持 SSH 隧道，提供密码、私钥及私钥口令认证。
 - Navicat `.ncx` 导入先预览再勾选，显示重复、无效和不兼容的连接，并保留支持的 SSH 配置。
-- 数据库结构按需加载，一次展开一个数据库；表搜索作用于当前展开数据库的已加载表。
+- 数据库结构按需加载：先搜索数据库，展开后在库内搜索已加载的数据表，一次展开一个数据库。
 - Redis 提供单机连接、Key 扫描分页、详情、值 / TTL 编辑、删除及命令控制台。
 
 #### SQL 文件与开发工具
@@ -220,7 +220,7 @@ See [Releases](https://github.com/AllenZhanga/NexSQL/releases) for available ver
 - **SQL editor:** Monaco tabs, independent undo, draft recovery, dialect formatting, selected-script execution, multiple results, history, cancellation, and configurable timeout.
 - **Results:** rectangular selection, loaded-result search and filters, sorting, column sizing / hiding / pinning, cell details, CSV export, and selection copy as TSV, JSON, or INSERT.
 - **Tables:** server-side filtering, sorting and pagination, staged inserts / updates / deletes, field and index design, and one-click DDL copy. Updating or deleting existing rows requires a primary key.
-- **Connections:** independently scrolling connection and schema panes with a saved resize ratio, connection search by name / host / port / group / tags, collapsible groups, on-demand database tree loading, current-database table search, password / private-key SSH authentication, and NexSQL JSON / Navicat NCX import with preview and duplicate detection.
+- **Connections:** independently scrolling connection and schema panes with a saved resize ratio, connection search by name / host / port / group / tags, collapsible groups, on-demand database tree loading, database search followed by table search inside the expanded database, password / private-key SSH authentication, and NexSQL JSON / Navicat NCX import with preview and duplicate detection.
 - **Data transfer:** table-list context menus for SQL import / export, structure-only / data-only / combined export, and cancellable script import with execution logs.
 - **Redis:** standalone key browsing with scan pagination, value and TTL editing, deletion, and a command console.
 - **Developer workbench:** JSON formatting / minifying / unescaping, timestamp conversion, and Markdown preview, independent of SQL tabs.
@@ -228,7 +228,7 @@ See [Releases](https://github.com/AllenZhanga/NexSQL/releases) for available ver
 
 ### Connection setup and migration
 
-Create and test a connection, select a database, then open a query or table. Database tables load when that database is expanded; search applies to its loaded tables.
+Create and test a connection, select a database, then open a query or table. Use the structure search to find a database, then expand it to load tables and reveal its own table-search field.
 
 For SSH, enter the jump-server credentials and a database address reachable **from the jump server**. Private-key paths must exist on the current computer. First use requires explicit SHA256 host-fingerprint acceptance; changed fingerprints are refused. Browsing, query sessions, and cancellation control connections use the tunnel.
 

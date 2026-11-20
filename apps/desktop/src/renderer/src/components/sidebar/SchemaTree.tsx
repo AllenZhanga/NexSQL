@@ -1,9 +1,10 @@
 import { SQLTransferDialog } from '../transfer/SQLTransferDialog'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronRight, ChevronDown, Table2, Eye, Columns, Database, Key, RefreshCw, Search, X, Plus, Languages, Trash2 } from 'lucide-react'
+import { ChevronRight, ChevronDown, Table2, Eye, Columns, Database, Key, RefreshCw, Search, X, Plus, Languages, Trash2, Power } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useT } from '@renderer/stores/i18nStore'
+import { matchesSchemaName } from './schemaSearch'
 import { useConnectionStore } from '@renderer/stores/connectionStore'
 import { schemaRequestKey, useQueryStore } from '@renderer/stores/queryStore'
 import { TableDesigner } from '@renderer/components/designer/TableDesigner'
@@ -621,7 +622,6 @@ function DatabaseNode({
   connectionId,
   expanded,
   onToggle,
-  filter,
   onOpenDatabase,
   onDropDatabase,
   onCreateTable,
@@ -632,18 +632,22 @@ function DatabaseNode({
   connectionId: string
   expanded: boolean
   onToggle: () => void
-  filter: string
   onOpenDatabase: (connectionId: string, database: string) => void
   onDropDatabase: (connectionId: string, database: string) => void
   onCreateTable: (connectionId: string, database: string) => void
   onAlterCharset: (connectionId: string, database: string) => void
 }): JSX.Element {
+  const t = useT()
+  const [filter, setFilter] = useState('')
+  useEffect(() => {
+    if (!expanded) setFilter('')
+  }, [expanded])
   const loadSchema = useQueryStore(state => state.loadSchema)
   const { connections } = useConnectionStore()
   const dbType = connections.find((c) => c.id === connectionId)?.type ?? 'mysql'
   const hasFilter = expanded && filter.trim().length > 0
   const visibleTables = !expanded ? [] : hasFilter
-    ? db.tables.filter(t => t.name.toLowerCase().includes(filter.trim().toLowerCase()))
+    ? db.tables.filter(table => matchesSchemaName(table.name, filter))
     : db.tables
   const requestKey = schemaRequestKey(connectionId, db.name)
   const loading = useQueryStore(state => state.schemaLoading[requestKey])
@@ -693,6 +697,26 @@ function DatabaseNode({
         </button>
         <span className="text-2xs text-text-muted ml-auto shrink-0">{loading ? '加载中…' : !db.tablesLoaded ? '未加载' : hasFilter ? `${visibleTables.length}/${db.tables.length}` : db.tables.length}</span>
       </div>
+      {expanded && (
+        <div className="pr-3 pt-1 pb-1.5" style={{ paddingLeft: `${depth * 12 + 24}px` }}>
+          <div className="relative">
+            <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+            <input
+              type="text"
+              value={filter}
+              onChange={event => setFilter(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Escape') { event.stopPropagation(); setFilter('') }
+              }}
+              aria-label={t('sidebar.searchTablesLabel').replace('{database}', db.name)}
+              placeholder={t('sidebar.searchTables').replace('{database}', db.name)}
+              className="w-full bg-app-input border border-app-border rounded-md pl-6 pr-6 py-1 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-blue transition-colors"
+            />
+            {filter && <button type="button" onClick={() => setFilter('')} aria-label={t('sidebar.clearTableSearch').replace('{database}', db.name)}
+              className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded text-text-muted hover:text-text-primary"><X size={11} /></button>}
+          </div>
+        </div>
+      )}
       {expanded && loadError && <div role="alert" className="px-5 py-2 text-xs text-accent-red break-words">{loadError}<button className="ml-2 underline" onClick={() => void loadSchema(connectionId, db.name)}>重试</button></div>}
       {expanded && !loading && !loadError && db.tablesLoaded && visibleTables.length === 0 && <div className="px-6 py-2 text-xs text-text-muted">{hasFilter ? '当前库没有匹配的表' : '当前库暂无数据表'}</div>}
       {expanded && visibleTables.map((table) => (
@@ -749,7 +773,8 @@ function SchemaConnectionNode({
   isActive,
   activeDatabase,
   onToggleDatabase,
-  filter,
+  databaseFilter,
+  onCollapse,
   onCreateDatabase,
   onOpenDatabase,
   onCreateTable,
@@ -762,7 +787,8 @@ function SchemaConnectionNode({
   isActive: boolean
   activeDatabase: string | null
   onToggleDatabase: (connectionId: string, database: string) => void
-  filter: string
+  databaseFilter: string
+  onCollapse: (connectionId: string) => void
   onCreateDatabase: (connectionId: string) => void
   onOpenDatabase: (connectionId: string, database: string) => void
   onCreateTable: (connectionId: string, database: string) => void
@@ -770,15 +796,77 @@ function SchemaConnectionNode({
   onAlterCharset: (connectionId: string, database: string) => void
 }): JSX.Element {
   const requestKey = schemaRequestKey(connectionId)
+  const t = useT()
+  const disconnect = useConnectionStore(state => state.disconnect)
   const loading = useQueryStore(state => state.schemaLoading[requestKey])
   const loadError = useQueryStore(state => state.schemaErrors[requestKey])
   const loadSchema = useQueryStore(state => state.loadSchema)
   const [expanded, setExpanded] = useState(true)
+  const visibleDatabases = databases.filter(database => matchesSchemaName(database.name, databaseFilter))
+  const searching = databaseFilter.trim().length > 0
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [closing, setClosing] = useState(false)
+  const [closeError, setCloseError] = useState<string | null>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!menu) return
+    closeButton.current?.focus()
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMenu(null)
+        trigger.current?.focus()
+      }
+    }
+    const dismiss = (): void => setMenu(null)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', dismiss)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('resize', dismiss)
+    }
+  }, [menu])
+
+  const closeConnection = async (): Promise<void> => {
+    if (closing) return
+    setClosing(true)
+    setCloseError(null)
+    try {
+      await disconnect(connectionId)
+      setMenu(null)
+    } catch (error) {
+      setCloseError(`${t('conn.closeConnectionFailed')}：${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setClosing(false)
+    }
+  }
 
   return (
     <div>
       <button
-        onClick={() => setExpanded((v) => !v)}
+        ref={trigger}
+        onClick={() => {
+          if (expanded) onCollapse(connectionId)
+          setExpanded(value => !value)
+        }}
+        aria-expanded={expanded}
+        aria-haspopup="menu"
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          setCloseError(null)
+          setMenu({ x: event.clientX, y: event.clientY })
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault()
+            const rect = event.currentTarget.getBoundingClientRect()
+            setCloseError(null)
+            setMenu({ x: rect.left + 12, y: rect.bottom })
+          }
+        }}
         className={clsx(
           'w-full flex items-center gap-1 px-3 py-1 text-xs hover:bg-app-hover transition-colors',
           isActive ? 'text-text-primary' : 'text-text-secondary'
@@ -786,6 +874,7 @@ function SchemaConnectionNode({
       >
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span className="truncate font-medium">{connectionName}</span>
+        {searching && <span className="text-2xs text-text-muted tabular-nums shrink-0">{visibleDatabases.length}/{databases.length}</span>}
         <span
           className="ml-auto p-0.5 rounded text-text-muted hover:text-text-primary hover:bg-app-hover"
           title="新建数据库"
@@ -806,9 +895,24 @@ function SchemaConnectionNode({
           <Plus size={11} />
         </span>
       </button>
+      {menu && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} onContextMenu={(event) => { event.preventDefault(); setMenu(null) }} />
+          <div role="menu" aria-label={t('conn.actions')} className="fixed z-50 bg-app-sidebar border border-app-border rounded shadow-2xl py-1 w-[220px] text-xs"
+            style={{ top: Math.max(8, Math.min(menu.y, window.innerHeight - 180)), left: Math.max(8, Math.min(menu.x, window.innerWidth - 228)) }}>
+            <div className="px-3 py-1 text-text-muted text-2xs border-b border-app-border mb-1 truncate" title={connectionName}>{connectionName}</div>
+            <button ref={closeButton} role="menuitem" disabled={closing} onClick={() => void closeConnection()}
+              className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-text-secondary hover:bg-app-active hover:text-text-primary transition-colors disabled:opacity-50">
+              <Power size={12} className="shrink-0" />{t(closing ? 'conn.closingConnection' : 'conn.closeConnection')}
+            </button>
+            {closeError && <p role="alert" className="px-3 py-2 text-2xs text-accent-red break-words">{closeError}</p>}
+          </div>
+        </>, document.body
+      )}
       {expanded && loading && !databases.length && <div role="status" className="px-6 py-2 text-xs text-text-muted">正在加载数据库列表…</div>}
       {expanded && loadError && <div role="alert" className="px-5 py-2 text-xs text-accent-red">{loadError}<button className="ml-2 underline" onClick={() => void loadSchema(connectionId)}>重试</button></div>}
-      {expanded && databases.map((db) => (
+      {expanded && !loading && !loadError && visibleDatabases.length === 0 && <div className="px-6 py-2 text-xs text-text-muted">{t(searching ? 'sidebar.noDatabaseMatches' : 'sidebar.noDatabases')}</div>}
+      {expanded && visibleDatabases.map((db) => (
         <DatabaseNode
           key={db.name}
           db={db}
@@ -816,7 +920,6 @@ function SchemaConnectionNode({
           connectionId={connectionId}
           expanded={activeDatabase === db.name}
           onToggle={() => onToggleDatabase(connectionId, db.name)}
-          filter={filter}
           onOpenDatabase={onOpenDatabase}
           onDropDatabase={onDropDatabase}
           onCreateTable={onCreateTable}
@@ -835,7 +938,7 @@ export function SchemaTree(): JSX.Element {
   const loadSchema = useQueryStore(state => state.loadSchema)
   const openDatabaseTab = useQueryStore(state => state.openDatabaseTab)
   const [expandedDatabase, setExpandedDatabase] = useState<{ connectionId: string; database: string } | null>(null)
-  const [filter, setFilter] = useState('')
+  const [databaseFilter, setDatabaseFilter] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [dialog, setDialog] = useState<SchemaDialog>({ type: 'none' })
   const [submitting, setSubmitting] = useState(false)
@@ -846,20 +949,19 @@ export function SchemaTree(): JSX.Element {
 
   useEffect(() => {
     if (expandedDatabase && (statuses[expandedDatabase.connectionId] !== 'connected' ||
+        !matchesSchemaName(expandedDatabase.database, databaseFilter) ||
         (schema[expandedDatabase.connectionId] && !schema[expandedDatabase.connectionId].databases.some(db => db.name === expandedDatabase.database)))) {
       setExpandedDatabase(null)
-      setFilter('')
     }
-  }, [statuses, schema, expandedDatabase])
+  }, [statuses, schema, expandedDatabase, databaseFilter])
 
   const selectDatabase = (connectionId: string, database: string): void => {
     setExpandedDatabase({connectionId, database})
-    setFilter('')
     void loadSchema(connectionId, database, false)
   }
   const toggleDatabase = (connectionId: string, database: string): void => {
     if (expandedDatabase?.connectionId === connectionId && expandedDatabase.database === database) {
-      setExpandedDatabase(null); setFilter('')
+      setExpandedDatabase(null)
     } else selectDatabase(connectionId, database)
   }
 
@@ -993,17 +1095,18 @@ export function SchemaTree(): JSX.Element {
           <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
           <input
             type="text"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            disabled={!expandedDatabase}
-            aria-label={t('sidebar.searchTablesLabel')}
-            placeholder={expandedDatabase ? t('sidebar.searchTables').replace('{database}', expandedDatabase.database) : t('sidebar.chooseDatabase')}
+            value={databaseFilter}
+            onChange={(event) => setDatabaseFilter(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Escape') setDatabaseFilter('') }}
+            disabled={connectedConnections.length === 0}
+            aria-label={t('sidebar.searchDatabasesLabel')}
+            placeholder={t('sidebar.searchDatabases')}
             className="w-full bg-app-input border border-app-border rounded-md pl-6 pr-6 py-1.5 text-xs text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent-blue transition-colors"
           />
-          {filter && (
+          {databaseFilter && (
             <button
-              onClick={() => setFilter('')}
-              aria-label="清空表搜索"
+              onClick={() => setDatabaseFilter('')}
+              aria-label={t('sidebar.clearDatabaseSearch')}
               className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary"
             >
               <X size={11} />
@@ -1025,7 +1128,10 @@ export function SchemaTree(): JSX.Element {
               isActive={activeConnectionId === conn.id}
               activeDatabase={expandedDatabase?.connectionId === conn.id ? expandedDatabase.database : null}
               onToggleDatabase={toggleDatabase}
-              filter={filter}
+              databaseFilter={databaseFilter}
+              onCollapse={(connectionId) => {
+                if (expandedDatabase?.connectionId === connectionId) setExpandedDatabase(null)
+              }}
               onCreateDatabase={handleCreateDatabase}
               onOpenDatabase={handleOpenDatabase}
               onCreateTable={handleCreateTable}

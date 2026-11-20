@@ -22,12 +22,19 @@ export function ResultsPanel({
   const connectionType = useConnectionStore(
     (state) => state.connections.find((c) => c.id === tab?.connectionId)?.type
   )
-  const [selected, setSelected] = useState(0)
+  // null follows the newest result; selecting a tab pins its execution index.
+  const [selected, setSelected] = useState<number | null>(null)
   const [messages, setMessages] = useState(false)
   const [now, setNow] = useState(Date.now())
   const results = tab?.batch?.results ?? (fallbackResult ? [fallbackResult] : [])
+  const latestIndex = results.length - 1
+  const selectedIndex = selected === null ? latestIndex : Math.min(selected, latestIndex)
+  const resultOrder =
+    latestIndex < 0
+      ? []
+      : [latestIndex, ...Array.from({ length: latestIndex }, (_, index) => index)]
   useEffect(() => {
-    setSelected(0)
+    setSelected(null)
     setMessages(false)
   }, [tab?.id, tab?.executionId])
   useEffect(() => {
@@ -35,7 +42,7 @@ export function ResultsPanel({
     const timer = setInterval(() => setNow(Date.now()), 250)
     return () => clearInterval(timer)
   }, [isLoading])
-  const result = results[Math.min(selected, results.length - 1)]
+  const result = results[selectedIndex]
   const seconds = Math.max(0, now - (tab?.startedAt ?? now)) / 1000
   return (
     <div className="result-workspace flex flex-col h-full bg-app-bg">
@@ -78,22 +85,30 @@ export function ResultsPanel({
       )}
       {results.length > 0 && (
         <div className="result-tabs" role="tablist" aria-label="查询结果">
-          {results.map((item, index) => (
-            <button
-              key={index}
-              role="tab"
-              aria-selected={selected === index && !messages}
-              className={clsx('result-tab', selected === index && !messages && 'selected')}
-              onClick={() => {
-                setSelected(index)
-                setMessages(false)
-              }}
-            >
-              {item.error ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}
-              结果 {index + 1}
-              <span className="text-text-muted">{item.rowCount} 行</span>
-            </button>
-          ))}
+          {resultOrder.map((index) => {
+            const item = results[index]
+            return (
+              <button
+                key={index}
+                role="tab"
+                aria-selected={selectedIndex === index && !messages}
+                className={clsx('result-tab', selectedIndex === index && !messages && 'selected')}
+                title={`结果 ${index + 1} · ${item.sql.slice(0, 200)}`}
+                onClick={() => {
+                  setSelected(index)
+                  setMessages(false)
+                }}
+              >
+                {item.error ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}
+                {index === latestIndex && results.length > 1
+                  ? isLoading
+                    ? '最新结果'
+                    : '最终结果'
+                  : `结果 ${index + 1}`}
+                <span className="text-text-muted">{item.rowCount} 行</span>
+              </button>
+            )
+          })}
           <button
             role="tab"
             aria-selected={messages}
@@ -121,13 +136,13 @@ export function ResultsPanel({
                   className="absolute inset-0"
                   style={{
                     visibility:
-                      !messages && index === selected && !entry.error ? 'visible' : 'hidden'
+                      !messages && index === selectedIndex && !entry.error ? 'visible' : 'hidden'
                   }}
                 >
                   <ResultGrid
                     dialect={connectionType === 'redis' ? undefined : connectionType}
                     result={entry}
-                    active={!messages && index === selected}
+                    active={!messages && index === selectedIndex}
                   />
                 </div>
               )
@@ -162,7 +177,7 @@ export function ResultsPanel({
             <h3>{isLoading ? '正在执行查询' : '从一个查询开始'}</h3>
             <p>
               {isLoading
-                ? '结果会按执行顺序显示，可随时停止本次执行。'
+                ? '最新结果显示在最前，执行日志保留原执行顺序，可随时停止本次执行。'
                 : '选中 SQL 后执行，或运行当前标签的全部语句。'}
             </p>
             <kbd>⌘ / Ctrl + Enter</kbd>

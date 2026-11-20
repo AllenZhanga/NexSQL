@@ -78,10 +78,12 @@ function ConnContextMenu({
   onOpenRedisBrowser: () => void
 }): JSX.Element {
   const t = useT()
+  const connected = useConnectionStore(state => state.statuses[menu.conn.id] === 'connected')
+  const connectLabel = t(connected ? 'conn.closeConnection' : 'conn.connectBtn')
   const items =
     menu.conn.type === 'redis'
       ? [
-          { label: t('conn.connectBtn'), action: onConnect },
+          { label: connectLabel, action: onConnect },
           { label: t('redis.openConsole'), action: onOpenRedisConsole },
           { label: t('redis.openBrowser'), action: onOpenRedisBrowser },
           { divider: true },
@@ -91,7 +93,7 @@ function ConnContextMenu({
           { label: t('conn.deleteConn'), action: onDelete, danger: true }
         ]
       : [
-          { label: t('conn.connectBtn'), action: onConnect },
+          { label: connectLabel, action: onConnect },
           { label: t('conn.editConnMenu'), action: onEdit },
           { label: t('conn.copyConn'), action: onDuplicate },
           { divider: true },
